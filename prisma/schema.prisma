@@ -1,0 +1,385 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  clerkId   String   @unique
+  email     String   @unique
+  firstName String?
+  lastName  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organizations Organization[]
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  cuit      String   @unique // Argentinian Tax ID
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users            User[]
+  accounts         Account[]
+  journalEntries   JournalEntry[]
+  invoices         Invoice[]
+  contacts         Contact[]
+  products         Product[]
+  payments         Payment[]
+  accountingConfig AccountingConfig?
+  fiscalPeriods    FiscalPeriod[]
+  treasuryAccounts TreasuryAccount[]
+  attachments      Attachment[]
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+model Account {
+  id             String       @id @default(uuid())
+  code           String // e.g., "1.1.01"
+  name           String
+  type           AccountType
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  // Hierarchical relation
+  parentId String?
+  parent   Account?  @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children Account[] @relation("AccountHierarchy")
+
+  transactionLines TransactionLine[]
+
+  // Relations with AccountingConfig
+  salesConfigs             AccountingConfig[] @relation("SalesAccount")
+  salesVatConfigs          AccountingConfig[] @relation("SalesVatAccount")
+  receivablesConfigs       AccountingConfig[] @relation("ReceivablesAccount")
+  purchasesConfigs         AccountingConfig[] @relation("PurchasesAccount")
+  purchasesVatConfigs      AccountingConfig[] @relation("PurchasesVatAccount")
+  payablesConfigs          AccountingConfig[] @relation("PayablesAccount")
+  cashConfigs              AccountingConfig[] @relation("CashAccount")
+  bankConfigs              AccountingConfig[] @relation("BankAccount")
+  // Relations with Products
+  productSalesAccounts     Product[]          @relation("ProductSalesAccount")
+  productPurchasesAccounts Product[]          @relation("ProductPurchasesAccount")
+
+  // Relations with Treasury
+  treasuryAccounts TreasuryAccount[]
+
+  @@unique([organizationId, code])
+}
+
+model JournalEntry {
+  id             String       @id @default(uuid())
+  date           DateTime
+  description    String
+  number         Int          @default(autoincrement()) // Asiento number
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  lines     TransactionLine[]
+  invoices  Invoice[]
+  payments  Payment[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+model TransactionLine {
+  id             String       @id @default(uuid())
+  journalEntryId String
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id])
+  accountId      String
+  account        Account      @relation(fields: [accountId], references: [id])
+
+  debit       Decimal @default(0)
+  credit      Decimal @default(0)
+  description String?
+}
+
+enum ContactType {
+  CUSTOMER
+  VENDOR
+}
+
+model Contact {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name    String
+  cuit    String?
+  email   String?
+  address String?
+  phone   String?
+  type    ContactType
+
+  invoices Invoice[]
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  attachments Attachment[]
+
+  @@unique([organizationId, cuit])
+}
+
+enum InvoiceLetter {
+  A
+  B
+  C
+  M
+}
+
+enum InvoiceFlow {
+  SALE
+  PURCHASE
+}
+
+model Invoice {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  flow        InvoiceFlow
+  letter      InvoiceLetter
+  pointOfSale Int // Punto de Venta
+  number      Int
+  date        DateTime
+  dueDate     DateTime?
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id])
+
+  // Snapshot of contact info in case contact is deleted or changed
+  contactName    String?
+  contactCuit    String?
+  contactAddress String?
+
+  netAmount   Decimal // Neto Gravado
+  vatAmount   Decimal // IVA
+  totalAmount Decimal
+
+  items    InvoiceItem[]
+  payments Payment[]
+
+  // Vinculación con asiento contable generado
+  journalEntryId String?
+  journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id])
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  attachments Attachment[]
+
+  @@unique([organizationId, flow, letter, pointOfSale, number])
+}
+
+model InvoiceItem {
+  id        String  @id @default(uuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  description String
+  quantity    Decimal
+  unitPrice   Decimal
+  vatRate     Decimal // 10.5, 21, 27, etc.
+  total       Decimal
+}
+
+enum ItemType {
+  PRODUCT
+  SERVICE
+}
+
+enum ItemScope {
+  SALE
+  PURCHASE
+  BOTH
+}
+
+model Product {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name        String
+  sku         String?
+  description String?
+
+  type        ItemType  @default(PRODUCT)
+  scope       ItemScope @default(BOTH)
+  isStockable Boolean   @default(true)
+
+  // Precios
+  purchasePrice Decimal @default(0)
+  salePrice     Decimal @default(0)
+  margin        Decimal @default(0) // Porcentaje de ganancia
+
+  stock Decimal @default(0)
+
+  // Cuentas Contables Específicas
+  salesAccountId     String?
+  salesAccount       Account? @relation("ProductSalesAccount", fields: [salesAccountId], references: [id])
+  purchasesAccountId String?
+  purchasesAccount   Account? @relation("ProductPurchasesAccount", fields: [purchasesAccountId], references: [id])
+
+  invoiceItems InvoiceItem[]
+  attachments  Attachment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TreasuryAccount {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name     String
+  type     PaymentMethod
+  currency String        @default("ARS")
+
+  // Datos Bancarios
+  bankName String?
+  cbu      String?
+  alias    String?
+  number   String?
+
+  // Link a Cuenta Contable
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id])
+
+  // Balance actual
+  balance Decimal @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Attachment {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  url      String
+  key      String // R2 object key for deletion
+  name     String
+  fileType String
+  size     Int
+
+  // Relaciones Opcionales
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id])
+
+  paymentId String?
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id])
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CHECK
+  CREDIT_CARD
+  DEBIT_CARD
+  OTHER
+}
+
+enum PaymentType {
+  PAYMENT // Pago a proveedor
+  COLLECTION // Cobranza de cliente
+}
+
+model Payment {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  type      PaymentType
+  method    PaymentMethod
+  amount    Decimal
+  date      DateTime
+  reference String? // Número de cheque, transferencia, etc.
+  notes     String?
+
+  // Vinculación con facturas
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id])
+
+  // Vinculación con asiento contable
+  journalEntryId String?
+  journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id])
+
+  attachments Attachment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AccountingConfig {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  // Cuentas para Ventas
+  salesAccountId       String?
+  salesAccount         Account? @relation("SalesAccount", fields: [salesAccountId], references: [id])
+  salesVatAccountId    String?
+  salesVatAccount      Account? @relation("SalesVatAccount", fields: [salesVatAccountId], references: [id])
+  receivablesAccountId String?
+  receivablesAccount   Account? @relation("ReceivablesAccount", fields: [receivablesAccountId], references: [id])
+
+  // Cuentas para Compras
+  purchasesAccountId    String?
+  purchasesAccount      Account? @relation("PurchasesAccount", fields: [purchasesAccountId], references: [id])
+  purchasesVatAccountId String?
+  purchasesVatAccount   Account? @relation("PurchasesVatAccount", fields: [purchasesVatAccountId], references: [id])
+  payablesAccountId     String?
+  payablesAccount       Account? @relation("PayablesAccount", fields: [payablesAccountId], references: [id])
+
+  // Cuentas de Tesorería
+  cashAccountId String?
+  cashAccount   Account? @relation("CashAccount", fields: [cashAccountId], references: [id])
+  bankAccountId String?
+  bankAccount   Account? @relation("BankAccount", fields: [bankAccountId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FiscalPeriod {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name      String // e.g., "Ejercicio 2024"
+  startDate DateTime
+  endDate   DateTime
+  isActive  Boolean  @default(false)
+  isClosed  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, name])
+}
