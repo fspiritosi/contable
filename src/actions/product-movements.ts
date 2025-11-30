@@ -65,8 +65,10 @@ export async function getProductMovements(productId: string) {
             data: {
                 product: {
                     ...product,
-                    price: Number(product.price),
                     stock: Number(product.stock),
+                    purchasePrice: Number(product.purchasePrice),
+                    salePrice: Number(product.salePrice),
+                    margin: Number(product.margin),
                 },
                 movements,
             },

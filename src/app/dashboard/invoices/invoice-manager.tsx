@@ -73,11 +73,13 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
         const product = products.find(p => p.id === productId);
         if (product) {
             const newItems = [...newInvoice.items];
+            // Use salePrice for sales, purchasePrice for purchases
+            const price = newInvoice.flow === 'SALE' ? Number(product.salePrice) : Number(product.purchasePrice);
             newItems[index] = {
                 ...newItems[index],
                 productId: product.id,
                 description: product.name,
-                unitPrice: Number(product.price),
+                unitPrice: price,
             };
             setNewInvoice({ ...newInvoice, items: newItems });
         } else if (productId === "") {
