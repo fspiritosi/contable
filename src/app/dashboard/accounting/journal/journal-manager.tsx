@@ -7,9 +7,15 @@ import { Plus, Trash2, Save } from "lucide-react";
 import { parseLocalDate } from "@/lib/date-utils";
 import { cn } from "@/lib/utils";
 
-// Extended type to include relations
+// Serialized type for client components (Decimal -> number)
+type SerializedTransactionLine = Omit<TransactionLine, 'debit' | 'credit'> & {
+    debit: number;
+    credit: number;
+    account: Account;
+};
+
 type JournalEntryWithLines = JournalEntry & {
-    lines: (TransactionLine & { account: Account })[];
+    lines: SerializedTransactionLine[];
 };
 
 interface JournalManagerProps {
