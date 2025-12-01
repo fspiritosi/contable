@@ -1,20 +1,10 @@
-import { getOrganizations } from "@/actions/organizations";
 import { getPayments } from "@/actions/payments";
 import { getInvoices } from "@/actions/invoices";
+import { getActiveOrganizationId } from "@/lib/organization";
 import PaymentManager from "./payment-manager";
 
 export default async function PaymentsPage() {
-    const { data: organizations } = await getOrganizations();
-
-    if (!organizations || organizations.length === 0) {
-        return (
-            <div className="p-8 text-center">
-                <p className="text-gray-500">No hay organizaciones configuradas.</p>
-            </div>
-        );
-    }
-
-    const currentOrgId = organizations[0].id;
+    const currentOrgId = await getActiveOrganizationId();
     const { data: payments } = await getPayments(currentOrgId);
     const { data: invoices } = await getInvoices(currentOrgId);
 

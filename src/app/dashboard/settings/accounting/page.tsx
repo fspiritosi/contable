@@ -1,20 +1,10 @@
-import { getOrganizations } from "@/actions/organizations";
 import { getAccountingConfig } from "@/actions/accounting-config";
 import { getAccounts } from "@/actions/accounts";
+import { getActiveOrganizationId } from "@/lib/organization";
 import AccountingConfigManager from "./accounting-config-manager";
 
 export default async function AccountingConfigPage() {
-    const { data: organizations } = await getOrganizations();
-
-    if (!organizations || organizations.length === 0) {
-        return (
-            <div className="p-8 text-center">
-                <p className="text-gray-500">No hay organizaciones configuradas.</p>
-            </div>
-        );
-    }
-
-    const currentOrgId = organizations[0].id;
+    const currentOrgId = await getActiveOrganizationId();
     const { data: config } = await getAccountingConfig(currentOrgId);
     const { data: accounts } = await getAccounts();
 

@@ -1,19 +1,9 @@
-import { getOrganizations } from "@/actions/organizations";
 import { getFiscalPeriods } from "@/actions/fiscal-periods";
+import { getActiveOrganizationId } from "@/lib/organization";
 import FiscalPeriodManager from "./fiscal-period-manager";
 
 export default async function FiscalPeriodsPage() {
-    const { data: organizations } = await getOrganizations();
-
-    if (!organizations || organizations.length === 0) {
-        return (
-            <div className="p-8 text-center">
-                <p className="text-gray-500">No hay organizaciones configuradas.</p>
-            </div>
-        );
-    }
-
-    const currentOrgId = organizations[0].id;
+    const currentOrgId = await getActiveOrganizationId();
     const { data: periods } = await getFiscalPeriods(currentOrgId);
 
     return (
