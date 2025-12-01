@@ -20,7 +20,20 @@ export default function ProductManager({ initialProducts, organizationId, accoun
     const [editingProduct, setEditingProduct] = useState<SerializedProduct | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
 
-    const [formData, setFormData] = useState({
+    const [formData, setFormData] = useState<{
+        name: string;
+        sku: string;
+        description: string;
+        stock: number;
+        type: ItemType;
+        scope: ItemScope;
+        isStockable: boolean;
+        purchasePrice: number;
+        salePrice: number;
+        margin: number;
+        salesAccountId: string;
+        purchasesAccountId: string;
+    }>({
         name: "",
         sku: "",
         description: "",

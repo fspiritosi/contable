@@ -28,7 +28,7 @@ export default async function AccountingConfigPage() {
             </div>
 
             <AccountingConfigManager
-                config={config}
+                config={config || null}
                 accounts={accounts || []}
                 organizationId={currentOrgId}
             />

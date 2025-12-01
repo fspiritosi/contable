@@ -1,21 +1,38 @@
 'use client';
 
 import { useState } from "react";
-import { Invoice, InvoiceFlow, InvoiceLetter, Contact, Product } from "@prisma/client";
+import { Invoice, InvoiceItem, InvoiceFlow, InvoiceLetter, Contact } from "@prisma/client";
 import { createInvoice } from "@/actions/invoices";
+import { SerializedProduct } from "@/actions/products";
 import { Plus, FileText, ArrowUpRight, ArrowDownLeft, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseLocalDate } from "@/lib/date-utils";
 
+// Serialized types for client components (Decimal -> number)
+type SerializedInvoiceItem = Omit<InvoiceItem, 'quantity' | 'unitPrice' | 'vatRate' | 'total'> & {
+    quantity: number;
+    unitPrice: number;
+    vatRate: number;
+    total: number;
+};
+
+type SerializedInvoice = Omit<Invoice, 'netAmount' | 'vatAmount' | 'totalAmount'> & {
+    netAmount: number;
+    vatAmount: number;
+    totalAmount: number;
+    contact: Contact | null;
+    items: SerializedInvoiceItem[];
+};
+
 interface InvoiceManagerProps {
-    initialInvoices: (Invoice & { contact: Contact | null, items: any[] })[];
+    initialInvoices: SerializedInvoice[];
     contacts: Contact[];
-    products: Product[];
+    products: SerializedProduct[];
     organizationId: string;
 }
 
 export default function InvoiceManager({ initialInvoices, contacts, products, organizationId }: InvoiceManagerProps) {
-    const [invoices, setInvoices] = useState(initialInvoices);
+    const [invoices, setInvoices] = useState<SerializedInvoice[]>(initialInvoices);
     const [isCreating, setIsCreating] = useState(false);
     const [filter, setFilter] = useState<InvoiceFlow | 'ALL'>('ALL');
 
