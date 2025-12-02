@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
-import { updateOrganization } from '@/actions/organizations';
-import { Building2, Edit2, TrendingUp, TrendingDown, Users, Package, FileText, DollarSign, BookOpen } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { updateOrganization, inviteUserToOrganization, listOrganizationInvitations } from '@/actions/organizations';
+import { Building2, Edit2, TrendingUp, TrendingDown, Users, Package, FileText, DollarSign, BookOpen, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import FileUploader from '@/components/file-uploader';
+import { useRouter } from 'next/navigation';
 
 type Organization = {
     id: string;
@@ -12,6 +13,21 @@ type Organization = {
     cuit: string;
     address: string | null;
     attachments?: any[];
+    users?: Array<{
+        id: string;
+        email: string;
+        firstName: string | null;
+        lastName: string | null;
+    }>;
+};
+
+type Invitation = {
+    id: string;
+    emailAddress: string;
+    role: string;
+    status: string;
+    createdAt: string | Date;
+    expiresAt: string | Date | null;
 };
 
 type Metrics = {
@@ -33,12 +49,55 @@ export default function OrganizationDetail({
     organization: Organization;
     metrics?: Metrics;
 }) {
+    const router = useRouter();
     const [isEditing, setIsEditing] = useState(false);
     const [formData, setFormData] = useState({
         name: organization.name,
         cuit: organization.cuit,
         address: organization.address || '',
     });
+    const [inviteEmail, setInviteEmail] = useState('');
+    const [isInviting, setIsInviting] = useState(false);
+    const [invitations, setInvitations] = useState<Invitation[]>([]);
+    const [isLoadingInvites, setIsLoadingInvites] = useState(false);
+
+    const loadInvitations = async () => {
+        setIsLoadingInvites(true);
+        const res = await listOrganizationInvitations(organization.id);
+        if (res.success && res.data) {
+            setInvitations(res.data);
+        }
+        setIsLoadingInvites(false);
+    };
+
+    useEffect(() => {
+        loadInvitations();
+    }, [organization.id]);
+
+    const handleInvite = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!inviteEmail.trim()) {
+            toast.error('Ingresá un email');
+            return;
+        }
+
+        setIsInviting(true);
+        const loadingToast = toast.loading('Enviando invitación...');
+        const res = await inviteUserToOrganization({
+            organizationId: organization.id,
+            email: inviteEmail.trim(),
+        });
+        toast.dismiss(loadingToast);
+        setIsInviting(false);
+
+        if (res.success) {
+            toast.success('Invitación enviada. El usuario debe aceptarla desde el correo.');
+            setInviteEmail('');
+            loadInvitations();
+        } else {
+            toast.error(res.error || 'No se pudo enviar la invitación');
+        }
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -50,7 +109,7 @@ export default function OrganizationDetail({
         if (res.success) {
             toast.success('Organización actualizada exitosamente');
             setIsEditing(false);
-            window.location.reload();
+            router.refresh();
         } else {
             toast.error(res.error || 'Error al actualizar');
         }
@@ -191,6 +250,102 @@ export default function OrganizationDetail({
                         </div>
                     </div>
                 )}
+            </div>
+
+            {/* Members & invitations */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 className="font-semibold text-lg text-gray-900">Miembros</h3>
+                        <p className="text-sm text-gray-500">Usuarios con acceso a esta organización.</p>
+                    </div>
+                </div>
+
+                <div className="grid gap-6 md:grid-cols-2">
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                            <p className="text-sm font-medium text-gray-700">Listado actual</p>
+                            <button
+                                type="button"
+                                onClick={loadInvitations}
+                                className="text-xs text-gray-500 hover:text-gray-900"
+                            >
+                                Actualizar
+                            </button>
+                        </div>
+                        <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                            {(organization.users && organization.users.length > 0) ? (
+                                organization.users.map(user => (
+                                    <div key={user.id} className="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 bg-gray-50">
+                                        <div className="h-10 w-10 rounded-full bg-gray-200 flex items-center justify-center text-sm font-semibold text-gray-600">
+                                            {user.firstName?.[0] || user.email[0].toUpperCase()}
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-medium text-gray-900">
+                                                {user.firstName || user.lastName ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() : 'Usuario sin nombre'}
+                                            </p>
+                                            <p className="text-xs text-gray-500">{user.email}</p>
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <p className="text-sm text-gray-500">Aún no hay usuarios asociados.</p>
+                            )}
+                            <div className="pt-4 border-t border-gray-200 space-y-3">
+                                <p className="text-sm font-medium text-gray-700">Invitaciones pendientes</p>
+                                {isLoadingInvites ? (
+                                    <p className="text-sm text-gray-500">Cargando...</p>
+                                ) : invitations.length > 0 ? (
+                                    invitations.map(invite => (
+                                        <div key={invite.id} className="rounded-lg border border-gray-200 px-3 py-2">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <p className="text-sm font-medium text-gray-900">{invite.emailAddress}</p>
+                                                    <p className="text-xs text-gray-500 capitalize">
+                                                        {invite.role.toLowerCase()} · {invite.status.toLowerCase()}
+                                                    </p>
+                                                </div>
+                                                <span className="text-xs text-gray-400">
+                                                    Expira {invite.expiresAt ? new Date(invite.expiresAt).toLocaleDateString() : '—'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <p className="text-sm text-gray-500">No hay invitaciones pendientes.</p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <form onSubmit={handleInvite} className="space-y-4 rounded-xl border border-dashed border-gray-300 p-4">
+                        <div className="flex items-center gap-2">
+                            <UserPlus className="h-5 w-5 text-gray-500" />
+                            <p className="font-semibold text-gray-900 text-sm">Invitar usuario</p>
+                        </div>
+                        <p className="text-sm text-gray-500">
+                            Enviaremos una invitación vía Clerk. Cuando el usuario acepte y haga su primer login, quedará vinculado automáticamente.
+                        </p>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                            <input
+                                type="email"
+                                required
+                                value={inviteEmail}
+                                onChange={(e) => setInviteEmail(e.target.value)}
+                                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
+                                placeholder="usuario@empresa.com"
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            disabled={isInviting}
+                            className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-60"
+                        >
+                            {isInviting ? 'Enviando...' : 'Enviar invitación'}
+                        </button>
+                    </form>
+                </div>
             </div>
 
             {/* Metrics Grid */}

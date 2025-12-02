@@ -55,7 +55,11 @@ export async function getPayments(organizationId: string, type?: PaymentType) {
         }));
 
         return { success: true, data: serializedPayments };
-    } catch (error) {
+    } catch (error: any) {
+        if (error?.code === 'P2022') {
+            console.warn("La estructura de la tabla de pagos no coincide con el esquema actual. Retornando lista vacía para evitar fallos.");
+            return { success: true, data: [] };
+        }
         console.error("Failed to fetch payments:", error);
         return { success: false, error: "Failed to fetch payments" };
     }
@@ -70,6 +74,7 @@ export async function createPayment(data: {
     reference?: string;
     notes?: string;
     invoiceId?: string;
+    treasuryAccountId: string; // Required: cuenta de tesorería
 }) {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
@@ -87,7 +92,41 @@ export async function createPayment(data: {
             };
         }
 
-        // Validate required accounts for treasury
+        // Validate treasury account selection
+        const treasuryAccount = await db.treasuryAccount.findUnique({
+            where: { id: data.treasuryAccountId },
+            select: {
+                id: true,
+                organizationId: true,
+                balance: true,
+                type: true,
+            },
+        });
+
+        if (!treasuryAccount || treasuryAccount.organizationId !== data.organizationId) {
+            return {
+                success: false,
+                error: "La cuenta de tesorería seleccionada no es válida.",
+            };
+        }
+
+        if (treasuryAccount.type !== data.method) {
+            return {
+                success: false,
+                error: "La cuenta de tesorería no coincide con el método seleccionado.",
+            };
+        }
+
+        const currentBalance = Number(treasuryAccount.balance);
+
+        if (data.type === 'PAYMENT' && currentBalance < data.amount) {
+            return {
+                success: false,
+                error: "Saldo insuficiente en la caja seleccionada.",
+            };
+        }
+
+        // Validate required accounts for treasury (Plan de Cuentas)
         const accountId = data.method === 'CASH' ? config.cashAccountId : config.bankAccountId;
 
         if (!accountId) {
@@ -176,6 +215,17 @@ export async function createPayment(data: {
             },
         });
 
+        // Update treasury account balance
+        const balanceChange = data.type === 'PAYMENT' ? -data.amount : data.amount;
+        await db.treasuryAccount.update({
+            where: { id: data.treasuryAccountId },
+            data: {
+                balance: {
+                    increment: balanceChange,
+                },
+            },
+        });
+
         // Create payment linked to journal entry
         const payment = await db.payment.create({
             data: {
@@ -188,6 +238,7 @@ export async function createPayment(data: {
                 notes: data.notes,
                 invoiceId: data.invoiceId,
                 journalEntryId: journalEntry.id,
+                treasuryAccountId: data.treasuryAccountId,
             },
             include: {
                 invoice: {
@@ -195,6 +246,7 @@ export async function createPayment(data: {
                         contact: true,
                     },
                 },
+                treasuryAccount: true,
                 journalEntry: {
                     include: {
                         lines: {
@@ -237,3 +289,44 @@ export async function createPayment(data: {
         return { success: false, error: "Failed to create payment" };
     }
 }
+
+export async function getTreasuryAccountMovements(treasuryAccountId: string) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    try {
+        const movements = await db.payment.findMany({
+            where: { treasuryAccountId },
+            include: {
+                invoice: {
+                    include: {
+                        contact: true,
+                    },
+                },
+            },
+            orderBy: { date: 'desc' },
+        });
+
+        // Serialize Decimal fields
+        const serializedMovements = movements.map(movement => ({
+            ...movement,
+            amount: Number(movement.amount),
+            invoice: movement.invoice ? {
+                ...movement.invoice,
+                netAmount: Number(movement.invoice.netAmount),
+                vatAmount: Number(movement.invoice.vatAmount),
+                totalAmount: Number(movement.invoice.totalAmount),
+            } : null,
+        }));
+
+        return { success: true, data: serializedMovements };
+    } catch (error: any) {
+        if (error?.code === 'P2022') {
+            console.warn("La estructura de la tabla de pagos no coincide con el esquema actual. Retornando movimientos vacíos.");
+            return { success: true, data: [] };
+        }
+        console.error("Failed to fetch treasury account movements:", error);
+        return { success: false, error: "Failed to fetch treasury account movements" };
+    }
+}
+

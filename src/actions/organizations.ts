@@ -3,6 +3,8 @@
 import { db } from "@/lib/db";
 import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
+import { clerkClient } from "@clerk/nextjs/server";
 
 export async function getOrganizations() {
     const { userId } = await auth();
@@ -15,6 +17,7 @@ export async function getOrganizations() {
                 organizations: {
                     include: {
                         attachments: true,
+                        users: true,
                     }
                 }
             },
@@ -23,8 +26,171 @@ export async function getOrganizations() {
         return { success: true, data: user?.organizations || [] };
     } catch (error) {
         console.error("Failed to fetch organizations:", error);
-        return { success: false, error: "Failed to fetch organizations" };
+        return { success: false, error: "Failed to fetch organizations", data: [] };
     }
+}
+
+export async function inviteUserToOrganization(params: {
+    organizationId: string;
+    email: string;
+    role?: string;
+}) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    console.log("[inviteUserToOrganization] CLERK_SECRET_KEY", process.env.CLERK_SECRET_KEY);
+
+    const organization = await db.organization.findUnique({
+        where: { id: params.organizationId },
+        select: { clerkOrganizationId: true, name: true },
+    });
+
+    if (!organization?.clerkOrganizationId) {
+        return {
+            success: false,
+            error: "La organización no está vinculada con Clerk. Configurá el clerkOrganizationId antes de invitar usuarios.",
+        };
+    }
+
+    const clerk = await clerkClient();
+
+    console.log("[inviteUserToOrganization] Attempt", {
+        clerkOrganizationId: organization.clerkOrganizationId,
+        localOrganizationId: params.organizationId,
+        organizationName: organization.name,
+        inviterUserId: userId,
+        email: params.email,
+        role: params.role || "basic_member",
+    });
+
+    try {
+        await clerk.organizations.createOrganizationInvitation({
+            organizationId: organization.clerkOrganizationId,
+            inviterUserId: userId,
+            emailAddress: params.email,
+            role: params.role || "basic_member",
+        });
+    } catch (error) {
+        const clerkError =
+            typeof error === "object" && error !== null && "errors" in error
+                ? (error as { errors?: Array<{ message?: string; code?: string; long_message?: string }> }).errors
+                : undefined;
+
+        console.error("[inviteUserToOrganization] Clerk invitation failed", {
+            clerkOrganizationId: organization.clerkOrganizationId,
+            inviterUserId: userId,
+            email: params.email,
+            rawError: error,
+            clerkError,
+        });
+
+        return {
+            success: false,
+            error: "No se pudo crear la invitación en Clerk. Verificá que el ID de la organización y el usuario invitador existan.",
+        };
+    }
+
+    return { success: true };
+}
+
+export async function listOrganizationInvitations(organizationId: string) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    try {
+        const user = await db.user.findUnique({
+            where: { clerkId: userId },
+            include: { organizations: { select: { id: true } } },
+        });
+
+        if (!user?.organizations.some(org => org.id === organizationId)) {
+            return { success: false, error: "Unauthorized", data: [] };
+        }
+
+        const organization = await db.organization.findUnique({
+            where: { id: organizationId },
+            select: { clerkOrganizationId: true },
+        });
+
+        if (!organization?.clerkOrganizationId) {
+            return { success: false, error: "La organización no está vinculada con Clerk", data: [] };
+        }
+
+        const clerk = await clerkClient();
+        const invitations = await clerk.organizations.getOrganizationInvitationList({
+            organizationId: organization.clerkOrganizationId,
+        });
+
+        const pending = invitations.data?.map((invite): {
+            id: string;
+            emailAddress: string;
+            role: string;
+            status: string;
+            createdAt: string;
+            expiresAt: string | null;
+        } => ({
+            id: invite.id,
+            emailAddress: invite.emailAddress,
+            role: invite.role,
+            status: invite.status ?? "pending",
+            createdAt: new Date(invite.createdAt).toISOString(),
+            expiresAt: invite.expiresAt ? new Date(invite.expiresAt).toISOString() : null,
+        })) || [];
+
+        return { success: true, data: pending };
+    } catch (error) {
+        console.error("Failed to list invitations:", error);
+        return { success: false, error: "No se pudieron obtener las invitaciones", data: [] };
+    }
+}
+
+export async function syncUserOrganizationMembership(params: {
+    clerkOrganizationId: string;
+    clerkUserId: string;
+}) {
+    const organization = await db.organization.findFirst({
+        where: { clerkOrganizationId: params.clerkOrganizationId },
+    });
+
+    if (!organization) {
+        console.warn("Organization not found for Clerk organization", params.clerkOrganizationId);
+        return { success: false, error: "Organization not found" };
+    }
+
+    let user = await db.user.findUnique({ where: { clerkId: params.clerkUserId } });
+
+    if (!user) {
+        const clerk = await clerkClient();
+        const clerkUser = await clerk.users.getUser(params.clerkUserId);
+        const primaryEmail = clerkUser.emailAddresses?.[0]?.emailAddress;
+
+        if (!primaryEmail) {
+            throw new Error("Clerk user missing email address");
+        }
+
+        user = await db.user.create({
+            data: {
+                clerkId: params.clerkUserId,
+                email: primaryEmail,
+                firstName: clerkUser.firstName,
+                lastName: clerkUser.lastName,
+            },
+        });
+    }
+
+    await db.organization.update({
+        where: { id: organization.id },
+        data: {
+            users: {
+                connect: { id: user.id },
+            },
+        },
+    });
+
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/settings");
+
+    return { success: true };
 }
 
 export async function createOrganization(data: {
@@ -68,11 +234,18 @@ export async function createOrganization(data: {
             },
         });
 
+        revalidatePath("/dashboard");
         revalidatePath("/dashboard/settings");
         return { success: true, data: organization };
     } catch (error) {
         console.error("Failed to create organization:", error);
-        return { success: false, error: "Failed to create organization" };
+
+        let message = "No se pudo crear la organización";
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+            message = "Ya existe una organización registrada con ese CUIT";
+        }
+
+        return { success: false, error: message };
     }
 }
 

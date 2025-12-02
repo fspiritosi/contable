@@ -7,6 +7,7 @@ import { DollarSign, CreditCard, Activity, Users } from "lucide-react";
 // Actually, I'll just use standard Tailwind for the cards to be safe.
 
 export default function DashboardPage() {
+
     return (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border border-gray-200 bg-white text-gray-950 shadow-sm p-6">

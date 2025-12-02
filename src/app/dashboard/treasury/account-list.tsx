@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { createTreasuryAccount, updateTreasuryAccount, deleteTreasuryAccount } from "@/actions/treasury";
 import { Plus, Wallet, Building2, Trash2, Edit2, X } from "lucide-react";
@@ -30,6 +31,7 @@ interface AccountListProps {
 }
 
 export default function AccountList({ initialAccounts, organizationId, chartOfAccounts }: AccountListProps) {
+    const router = useRouter();
     const [accounts, setAccounts] = useState<SerializedTreasuryAccount[]>(initialAccounts);
     const [isCreating, setIsCreating] = useState(false);
     const [editingAccount, setEditingAccount] = useState<SerializedTreasuryAccount | null>(null);
@@ -204,6 +206,15 @@ export default function AccountList({ initialAccounts, organizationId, chartOfAc
                                         <span>Cuenta Contable</span>
                                         <span>{account.account?.code}</span>
                                     </div>
+                                </div>
+                                <div className="pt-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => router.push(`/dashboard/treasury/${account.id}`)}
+                                        className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-800"
+                                    >
+                                        Ver movimientos
+                                    </button>
                                 </div>
                             </div>
                         </div>

@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { UserButton } from "@clerk/nextjs";
+import Link from "next/link";
 import {
     LayoutDashboard,
     ListTree,
@@ -9,11 +9,13 @@ import {
     Menu,
     Users,
     Package,
-    DollarSign
+    DollarSign,
+    BookOpen
 } from "lucide-react";
 import { getOrganizations } from "@/actions/organizations";
 import { getActiveOrganizationId } from "@/lib/organization";
 import OrganizationSwitcher from "@/components/organization-switcher";
+import CreateFirstOrganization from "@/components/create-first-organization";
 
 export default async function DashboardLayout({
     children,
@@ -21,6 +23,17 @@ export default async function DashboardLayout({
     children: React.ReactNode;
 }) {
     const { data: organizations } = await getOrganizations();
+
+    if (!organizations || organizations.length === 0) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+                <div className="max-w-md w-full">
+                    <CreateFirstOrganization />
+                </div>
+            </div>
+        );
+    }
+
     const activeOrgId = await getActiveOrganizationId();
 
     return (
@@ -45,15 +58,22 @@ export default async function DashboardLayout({
                             href="/dashboard/accounting/chart"
                             className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
                         >
-                            <ListTree className="h-4 w-4" />
+                            <BookOpen className="h-4 w-4" />
                             Plan de Cuentas
+                        </Link>
+                        <Link
+                            href="/dashboard/accounting/ledger"
+                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
+                        >
+                            <BookOpen className="h-4 w-4" />
+                            Libro Mayor
                         </Link>
                         <Link
                             href="/dashboard/accounting/journal"
                             className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
                         >
                             <FileText className="h-4 w-4" />
-                            Asientos
+                            Libro Diario
                         </Link>
                         <Link
                             href="/dashboard/invoices"

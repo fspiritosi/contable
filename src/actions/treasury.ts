@@ -31,6 +31,36 @@ export async function getTreasuryAccounts(organizationId: string) {
     }
 }
 
+export async function getTreasuryAccountDetail(id: string, organizationId: string) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    try {
+        const account = await db.treasuryAccount.findFirst({
+            where: { id, organizationId },
+            include: {
+                organization: true,
+                account: true,
+            },
+        });
+
+        if (!account) {
+            return { success: false, error: "Cuenta no encontrada" };
+        }
+
+        return {
+            success: true,
+            data: {
+                ...account,
+                balance: Number(account.balance),
+            },
+        };
+    } catch (error) {
+        console.error("Failed to fetch treasury account detail:", error);
+        return { success: false, error: "Failed to fetch treasury account detail" };
+    }
+}
+
 export async function createTreasuryAccount(data: {
     organizationId: string;
     name: string;

@@ -1,5 +1,6 @@
 import { getPayments } from "@/actions/payments";
 import { getInvoices } from "@/actions/invoices";
+import { getTreasuryAccounts } from "@/actions/treasury";
 import { getActiveOrganizationId } from "@/lib/organization";
 import PaymentManager from "./payment-manager";
 
@@ -7,6 +8,7 @@ export default async function PaymentsPage() {
     const currentOrgId = await getActiveOrganizationId();
     const { data: payments } = await getPayments(currentOrgId);
     const { data: invoices } = await getInvoices(currentOrgId);
+    const { data: treasuryAccounts } = await getTreasuryAccounts(currentOrgId);
 
     return (
         <div className="space-y-6">
@@ -20,6 +22,7 @@ export default async function PaymentsPage() {
             <PaymentManager
                 initialPayments={payments || []}
                 invoices={invoices || []}
+                treasuryAccounts={treasuryAccounts || []}
                 organizationId={currentOrgId}
             />
         </div>

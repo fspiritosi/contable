@@ -23,6 +23,7 @@ model Organization {
   name      String
   cuit      String   @unique // Argentinian Tax ID
   address   String?
+  clerkOrganizationId String? @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -265,8 +266,9 @@ model TreasuryAccount {
   // Balance actual
   balance Decimal @default(0)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  payments  Payment[]
 }
 
 model Attachment {
@@ -330,6 +332,10 @@ model Payment {
   journalEntryId String?
   journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id])
 
+  // Vinculación con cuenta de tesorería
+  treasuryAccountId String?
+  treasuryAccount   TreasuryAccount? @relation(fields: [treasuryAccountId], references: [id])
+
   attachments Attachment[]
 
   createdAt DateTime @default(now())
@@ -383,3 +389,5 @@ model FiscalPeriod {
 
   @@unique([organizationId, name])
 }
+
+
