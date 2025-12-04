@@ -2,20 +2,20 @@ import { UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import {
     LayoutDashboard,
-    ListTree,
     FileText,
     Receipt,
     Settings,
-    Menu,
-    Users,
     Package,
     DollarSign,
-    BookOpen
+    BookOpen,
+    ChevronDown,
 } from "lucide-react";
 import { getOrganizations } from "@/actions/organizations";
 import { getActiveOrganizationId } from "@/lib/organization";
 import OrganizationSwitcher from "@/components/organization-switcher";
 import CreateFirstOrganization from "@/components/create-first-organization";
+import { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 
 export default async function DashboardLayout({
     children,
@@ -34,6 +34,67 @@ export default async function DashboardLayout({
         );
     }
 
+type NavLinkProps = {
+    href: string;
+    icon?: ReactNode;
+    children: ReactNode;
+    className?: string;
+};
+
+function NavLink({ href, icon, children, className }: NavLinkProps) {
+    return (
+        <Link
+            href={href}
+            className={cn(
+                "flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200",
+                className,
+            )}
+        >
+            {icon}
+            {children}
+        </Link>
+    );
+}
+
+type NavSubLinkProps = {
+    href: string;
+    children: ReactNode;
+};
+
+function NavSubLink({ href, children }: NavSubLinkProps) {
+    return (
+        <Link
+            href={href}
+            className="ml-6 flex items-center rounded-md px-3 py-1.5 text-sm text-gray-600 transition-all hover:text-gray-900 hover:bg-gray-100"
+        >
+            {children}
+        </Link>
+    );
+}
+
+type AccordionProps = {
+    label: string;
+    icon?: ReactNode;
+    children: ReactNode;
+};
+
+function Accordion({ label, icon, children }: AccordionProps) {
+    return (
+        <details className="group" open>
+            <summary className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-gray-700 transition hover:bg-gray-50">
+                <span className="flex items-center gap-3">
+                    {icon}
+                    <span className="font-medium">{label}</span>
+                </span>
+                <ChevronDown className="h-4 w-4 text-gray-400 transition group-open:rotate-180" />
+            </summary>
+            <div className="mt-1 space-y-1">
+                {children}
+            </div>
+        </details>
+    );
+}
+
     const activeOrgId = await getActiveOrganizationId();
 
     return (
@@ -46,70 +107,32 @@ export default async function DashboardLayout({
                     </Link>
                 </div>
                 <div className="flex-1 overflow-auto py-4">
-                    <nav className="grid items-start px-4 text-sm font-medium gap-1">
-                        <Link
-                            href="/dashboard"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <LayoutDashboard className="h-4 w-4" />
-                            Dashboard
-                        </Link>
-                        <Link
-                            href="/dashboard/accounting/chart"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <BookOpen className="h-4 w-4" />
-                            Plan de Cuentas
-                        </Link>
-                        <Link
-                            href="/dashboard/accounting/ledger"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <BookOpen className="h-4 w-4" />
-                            Libro Mayor
-                        </Link>
-                        <Link
-                            href="/dashboard/accounting/journal"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <FileText className="h-4 w-4" />
-                            Libro Diario
-                        </Link>
-                        <Link
-                            href="/dashboard/invoices"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <Receipt className="h-4 w-4" />
-                            Facturas
-                        </Link>
-                        <Link
-                            href="/dashboard/contacts"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <Users className="h-4 w-4" />
-                            Contactos
-                        </Link>
-                        <Link
-                            href="/dashboard/inventory"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <Package className="h-4 w-4" />
-                            Inventario
-                        </Link>
-                        <Link
-                            href="/dashboard/payments"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <DollarSign className="h-4 w-4" />
-                            Pagos y Cobranzas
-                        </Link>
-                        <Link
-                            href="/dashboard/treasury"
-                            className="flex items-center gap-3 rounded-lg px-3 py-2 text-gray-700 transition-all hover:text-gray-950 hover:bg-gray-100 border border-transparent hover:border-gray-200"
-                        >
-                            <DollarSign className="h-4 w-4" />
-                            Tesorería
-                        </Link>
+                    <nav className="space-y-1 px-4 text-sm font-medium">
+                        <NavLink href="/dashboard" icon={<LayoutDashboard className="h-4 w-4" />}>Dashboard</NavLink>
+
+                        <Accordion label="Contabilidad" icon={<BookOpen className="h-4 w-4" />}>
+                            <NavSubLink href="/dashboard/accounting/chart">Plan de Cuentas</NavSubLink>
+                            <NavSubLink href="/dashboard/accounting/ledger">Libro Mayor</NavSubLink>
+                            <NavSubLink href="/dashboard/accounting/journal">Libro Diario</NavSubLink>
+                        </Accordion>
+
+                        <Accordion label="Ventas" icon={<Receipt className="h-4 w-4" />}>
+                            <NavSubLink href="/dashboard/sales">Facturas de Venta</NavSubLink>
+                            <NavSubLink href="/dashboard/clients">Clientes</NavSubLink>
+                        </Accordion>
+
+                        <Accordion label="Compras" icon={<Receipt className="h-4 w-4" />}>
+                            <NavSubLink href="/dashboard/purchases">Facturas de Compra</NavSubLink>
+                            <NavSubLink href="/dashboard/purchases/orders">Órdenes de Compra</NavSubLink>
+                            <NavSubLink href="/dashboard/vendors">Proveedores</NavSubLink>
+                        </Accordion>
+
+                        <NavLink href="/dashboard/inventory" icon={<Package className="h-4 w-4" />}>Inventario</NavLink>
+
+                        <Accordion label="Tesorería" icon={<DollarSign className="h-4 w-4" />}>
+                            <NavSubLink href="/dashboard/payments">Pagos y Cobranzas</NavSubLink>
+                            <NavSubLink href="/dashboard/treasury">Cajas y Bancos</NavSubLink>
+                        </Accordion>
                     </nav>
                 </div>
                 <div className="mt-auto p-4 border-t border-gray-200">

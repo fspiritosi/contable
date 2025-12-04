@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { updateAccountingConfig } from "@/actions/accounting-config";
 import { Settings, Save } from "lucide-react";
+import { toast } from "sonner";
 
 type Account = {
     id: string;
@@ -46,16 +47,19 @@ export default function AccountingConfigManager({ config, accounts, organization
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
+        const loadingToast = toast.loading("Guardando configuración...");
 
         const res = await updateAccountingConfig({
             organizationId,
             ...formData,
         });
 
+        toast.dismiss(loadingToast);
+
         if (res.success) {
-            alert("Configuración guardada exitosamente");
+            toast.success("Configuración guardada exitosamente");
         } else {
-            alert("Error al guardar la configuración: " + res.error);
+            toast.error(res.error || "Error al guardar la configuración");
         }
 
         setSaving(false);

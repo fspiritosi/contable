@@ -1,34 +1,48 @@
 'use client';
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Contact, ContactType } from "@prisma/client";
 import { createContact, deleteContact } from "@/actions/contacts";
 import { Plus, User, Building2, Phone, Mail, MapPin, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface ContactManagerProps {
     initialContacts: Contact[];
     organizationId: string;
+    defaultType?: ContactType | "ALL";
+    hideTypeFilters?: boolean;
 }
 
-export default function ContactManager({ initialContacts, organizationId }: ContactManagerProps) {
+export default function ContactManager({ initialContacts, organizationId, defaultType = "ALL", hideTypeFilters = false }: ContactManagerProps) {
     const [contacts, setContacts] = useState<Contact[]>(initialContacts);
     const [isCreating, setIsCreating] = useState(false);
-    const [filter, setFilter] = useState<ContactType | 'ALL'>('ALL');
+    const initialFilter = useMemo<ContactType | 'ALL'>(() => defaultType, [defaultType]);
+    const [filter, setFilter] = useState<ContactType | 'ALL'>(initialFilter);
 
+    const enforcedType = defaultType !== 'ALL' ? defaultType : undefined;
     const [newContact, setNewContact] = useState({
         name: "",
         cuit: "",
         email: "",
         address: "",
         phone: "",
-        type: "CUSTOMER" as ContactType,
+        type: (enforcedType ?? "CUSTOMER") as ContactType,
     });
+
+    useEffect(() => {
+        if (enforcedType) {
+            setNewContact(prev => ({ ...prev, type: enforcedType }));
+            setFilter(enforcedType);
+        }
+    }, [enforcedType]);
 
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
+        const loadingToast = toast.loading("Guardando contacto...");
         const res = await createContact({ ...newContact, organizationId });
+        toast.dismiss(loadingToast);
 
         if (res.success && res.data) {
             setContacts([...contacts, res.data]);
@@ -39,20 +53,24 @@ export default function ContactManager({ initialContacts, organizationId }: Cont
                 email: "",
                 address: "",
                 phone: "",
-                type: "CUSTOMER",
+                type: (enforcedType ?? "CUSTOMER") as ContactType,
             });
+            toast.success("Contacto creado exitosamente");
         } else {
-            alert("Error creating contact: " + res.error);
+            toast.error(res.error || "Error al crear el contacto");
         }
     };
 
     const handleDelete = async (id: string) => {
         if (!confirm("¿Estás seguro de eliminar este contacto?")) return;
+        const loadingToast = toast.loading("Eliminando contacto...");
         const res = await deleteContact(id);
+        toast.dismiss(loadingToast);
         if (res.success) {
             setContacts(contacts.filter(c => c.id !== id));
+            toast.success("Contacto eliminado");
         } else {
-            alert("Error deleting contact");
+            toast.error(res.error || "No se pudo eliminar el contacto");
         }
     }
 
@@ -63,26 +81,32 @@ export default function ContactManager({ initialContacts, organizationId }: Cont
             {!isCreating ? (
                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                     <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row justify-between items-center gap-4">
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => setFilter('ALL')}
-                                className={cn("px-3 py-1.5 text-sm rounded-md transition-colors", filter === 'ALL' ? "bg-gray-100 text-gray-900 font-medium" : "text-gray-500 hover:text-gray-900")}
-                            >
-                                Todos
-                            </button>
-                            <button
-                                onClick={() => setFilter('CUSTOMER')}
-                                className={cn("px-3 py-1.5 text-sm rounded-md transition-colors", filter === 'CUSTOMER' ? "bg-gray-100 text-gray-900 font-medium" : "text-gray-500 hover:text-gray-900")}
-                            >
-                                Clientes
-                            </button>
-                            <button
-                                onClick={() => setFilter('VENDOR')}
-                                className={cn("px-3 py-1.5 text-sm rounded-md transition-colors", filter === 'VENDOR' ? "bg-gray-100 text-gray-900 font-medium" : "text-gray-500 hover:text-gray-900")}
-                            >
-                                Proveedores
-                            </button>
-                        </div>
+                        {!hideTypeFilters ? (
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setFilter('ALL')}
+                                    className={cn("px-3 py-1.5 text-sm rounded-md transition-colors", filter === 'ALL' ? "bg-gray-100 text-gray-900 font-medium" : "text-gray-500 hover:text-gray-900")}
+                                >
+                                    Todos
+                                </button>
+                                <button
+                                    onClick={() => setFilter('CUSTOMER')}
+                                    className={cn("px-3 py-1.5 text-sm rounded-md transition-colors", filter === 'CUSTOMER' ? "bg-gray-100 text-gray-900 font-medium" : "text-gray-500 hover:text-gray-900")}
+                                >
+                                    Clientes
+                                </button>
+                                <button
+                                    onClick={() => setFilter('VENDOR')}
+                                    className={cn("px-3 py-1.5 text-sm rounded-md transition-colors", filter === 'VENDOR' ? "bg-gray-100 text-gray-900 font-medium" : "text-gray-500 hover:text-gray-900")}
+                                >
+                                    Proveedores
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="text-sm text-gray-500">
+                                Mostrando {filter === 'CUSTOMER' ? 'Clientes' : filter === 'VENDOR' ? 'Proveedores' : 'Todos'}
+                            </div>
+                        )}
                         <button
                             onClick={() => setIsCreating(true)}
                             className="flex items-center gap-2 text-sm bg-gray-900 text-white px-3 py-1.5 rounded-md hover:bg-gray-800 transition-colors"
@@ -158,17 +182,26 @@ export default function ContactManager({ initialContacts, organizationId }: Cont
 
                     <form onSubmit={handleCreate} className="space-y-4 max-w-2xl">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
-                                <select
-                                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
-                                    value={newContact.type}
-                                    onChange={(e) => setNewContact({ ...newContact, type: e.target.value as ContactType })}
-                                >
-                                    <option value="CUSTOMER">Cliente</option>
-                                    <option value="VENDOR">Proveedor</option>
-                                </select>
-                            </div>
+                            {enforcedType ? (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
+                                    <div className="px-3 py-2 rounded-md border border-gray-200 bg-gray-50 text-sm text-gray-700">
+                                        {enforcedType === 'CUSTOMER' ? 'Cliente' : 'Proveedor'}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
+                                    <select
+                                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
+                                        value={newContact.type}
+                                        onChange={(e) => setNewContact({ ...newContact, type: e.target.value as ContactType })}
+                                    >
+                                        <option value="CUSTOMER">Cliente</option>
+                                        <option value="VENDOR">Proveedor</option>
+                                    </select>
+                                </div>
+                            )}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Nombre / Razón Social</label>
                                 <input

@@ -38,6 +38,7 @@ model Organization {
   fiscalPeriods    FiscalPeriod[]
   treasuryAccounts TreasuryAccount[]
   attachments      Attachment[]
+  purchaseOrders   PurchaseOrder[]
 }
 
 enum AccountType {
@@ -127,6 +128,7 @@ model Contact {
   type    ContactType
 
   invoices Invoice[]
+  purchaseOrders PurchaseOrder[]
 
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
@@ -145,6 +147,12 @@ enum InvoiceLetter {
 enum InvoiceFlow {
   SALE
   PURCHASE
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  APPROVED
+  REJECTED
 }
 
 model Invoice {
@@ -178,11 +186,13 @@ model Invoice {
   journalEntryId String?
   journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id])
 
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation("PurchaseOrderInvoices", fields: [purchaseOrderId], references: [id])
+
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   attachments Attachment[]
 
-  @@unique([organizationId, flow, letter, pointOfSale, number])
 }
 
 model InvoiceItem {
@@ -239,9 +249,58 @@ model Product {
 
   invoiceItems InvoiceItem[]
   attachments  Attachment[]
+  purchaseOrderItems PurchaseOrderItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model PurchaseOrder {
+  id             String                @id @default(uuid())
+  organizationId String
+  organization   Organization          @relation(fields: [organizationId], references: [id])
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id])
+
+  status      PurchaseOrderStatus @default(DRAFT)
+  orderNumber Int                @default(autoincrement())
+  issueDate   DateTime
+  expectedDate DateTime?
+  notes       String?
+
+  subtotal Decimal @default(0)
+  vat      Decimal @default(0)
+  total    Decimal @default(0)
+  invoicedAmount Decimal @default(0)
+
+  items PurchaseOrderItem[]
+
+  invoices  Invoice[] @relation("PurchaseOrderInvoices")
+  invoicedAt DateTime?
+
+  approvedAt DateTime?
+  rejectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, orderNumber])
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(uuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  description String
+  quantity    Decimal
+  unitPrice   Decimal
+  vatRate     Decimal
+  total       Decimal
 }
 
 model TreasuryAccount {

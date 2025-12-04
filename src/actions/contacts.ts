@@ -6,13 +6,16 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@clerk/nextjs/server";
 import { getActiveOrganizationId } from "@/lib/organization";
 
-export async function getContacts(organizationId: string) {
+export async function getContacts(organizationId: string, type?: ContactType) {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
 
     try {
         const contacts = await db.contact.findMany({
-            where: { organizationId },
+            where: {
+                organizationId,
+                ...(type ? { type } : {}),
+            },
             orderBy: { name: 'asc' },
         });
         return { success: true, data: contacts };
@@ -48,6 +51,8 @@ export async function createContact(data: {
         });
 
         revalidatePath("/dashboard/contacts");
+        revalidatePath("/dashboard/clients");
+        revalidatePath("/dashboard/vendors");
         return { success: true, data: contact };
     } catch (error) {
         console.error("Failed to create contact:", error);
@@ -74,6 +79,8 @@ export async function updateContact(id: string, data: {
 
         revalidatePath("/dashboard/contacts");
         revalidatePath(`/dashboard/contacts/${id}`);
+        revalidatePath("/dashboard/clients");
+        revalidatePath("/dashboard/vendors");
         return { success: true, data: contact };
     } catch (error) {
         console.error("Failed to update contact:", error);
@@ -91,6 +98,8 @@ export async function deleteContact(id: string) {
         });
 
         revalidatePath("/dashboard/contacts");
+        revalidatePath("/dashboard/clients");
+        revalidatePath("/dashboard/vendors");
         return { success: true };
     } catch (error) {
         console.error("Failed to delete contact:", error);

@@ -1,20 +1,86 @@
 'use server';
 
 import { db } from "@/lib/db";
-import { InvoiceFlow, InvoiceLetter } from "@prisma/client";
+import { InvoiceFlow, InvoiceLetter, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { auth } from "@clerk/nextjs/server";
 
-export async function getInvoices(organizationId: string) {
+type SerializedInvoiceItem = {
+    id: string;
+    productId: string | null;
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    vatRate: number;
+    total: number;
+};
+
+type SerializedPayment = {
+    id: string;
+    type: string;
+    method: string;
+    amount: number;
+    date: string;
+    reference: string | null;
+    notes: string | null;
+    treasuryAccount: {
+        id: string;
+        name: string;
+        type: string;
+    } | null;
+};
+
+type SerializedAttachment = {
+    id: string;
+    name: string;
+    fileType: string;
+    size: number;
+    url: string;
+    createdAt: string;
+};
+
+export type SerializedInvoiceDetail = {
+    id: string;
+    flow: InvoiceFlow;
+    letter: InvoiceLetter;
+    pointOfSale: number;
+    number: number;
+    date: string;
+    dueDate: string | null;
+    contactId: string | null;
+    contact: {
+        id: string;
+        name: string;
+        cuit: string | null;
+        email: string | null;
+    } | null;
+    netAmount: number;
+    vatAmount: number;
+    totalAmount: number;
+    items: SerializedInvoiceItem[];
+    payments: SerializedPayment[];
+    attachments: SerializedAttachment[];
+    purchaseOrderId: string | null;
+    purchaseOrderNumber: number | null;
+    purchaseOrderRemaining: number | null;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export async function getInvoices(organizationId: string, flow?: InvoiceFlow) {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
 
     try {
         const invoices = await db.invoice.findMany({
-            where: { organizationId },
+            where: {
+                organizationId,
+                ...(flow ? { flow } : {}),
+            },
             include: {
                 contact: true,
                 items: true,
+                attachments: true,
             },
             orderBy: { date: 'desc' },
         });
@@ -32,6 +98,10 @@ export async function getInvoices(organizationId: string) {
                 vatRate: Number(item.vatRate),
                 total: Number(item.total),
             })),
+            attachments: inv.attachments.map(file => ({
+                ...file,
+                createdAt: file.createdAt.toISOString(),
+            })),
         }));
 
         return { success: true, data: serializedInvoices };
@@ -40,6 +110,135 @@ export async function getInvoices(organizationId: string) {
         return { success: false, error: "Failed to fetch invoices" };
     }
 }
+
+export async function getInvoiceDetail(organizationId: string, invoiceId: string) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    try {
+        const invoice = await db.invoice.findFirst({
+            where: { id: invoiceId, organizationId },
+            include: {
+                contact: true,
+                items: true,
+                payments: {
+                    include: {
+                        treasuryAccount: true,
+                    },
+                    orderBy: { date: 'desc' },
+                },
+                attachments: true,
+                purchaseOrder: true,
+            },
+        });
+
+        if (!invoice) {
+            return { success: false, error: "Factura no encontrada" };
+        }
+
+        const serialized: SerializedInvoiceDetail = {
+            id: invoice.id,
+            flow: invoice.flow,
+            letter: invoice.letter,
+            pointOfSale: invoice.pointOfSale,
+            number: invoice.number,
+            date: invoice.date.toISOString(),
+            dueDate: invoice.dueDate ? invoice.dueDate.toISOString() : null,
+            contactId: invoice.contactId,
+            contact: invoice.contact
+                ? {
+                      id: invoice.contact.id,
+                      name: invoice.contact.name,
+                      cuit: invoice.contact.cuit,
+                      email: invoice.contact.email,
+                  }
+                : null,
+            netAmount: Number(invoice.netAmount),
+            vatAmount: Number(invoice.vatAmount),
+            totalAmount: Number(invoice.totalAmount),
+            items: invoice.items.map(item => ({
+                id: item.id,
+                productId: item.productId,
+                description: item.description,
+                quantity: Number(item.quantity),
+                unitPrice: Number(item.unitPrice),
+                vatRate: Number(item.vatRate),
+                total: Number(item.total),
+            })),
+            payments: invoice.payments.map(payment => ({
+                id: payment.id,
+                type: payment.type,
+                method: payment.method,
+                amount: Number(payment.amount),
+                date: payment.date.toISOString(),
+                reference: payment.reference,
+                notes: payment.notes,
+                treasuryAccount: payment.treasuryAccount
+                    ? {
+                          id: payment.treasuryAccount.id,
+                          name: payment.treasuryAccount.name,
+                          type: payment.treasuryAccount.type,
+                      }
+                    : null,
+            })),
+            attachments: invoice.attachments.map(file => ({
+                id: file.id,
+                name: file.name,
+                fileType: file.fileType,
+                size: file.size,
+                url: file.url,
+                createdAt: file.createdAt.toISOString(),
+            })),
+            purchaseOrderId: invoice.purchaseOrderId,
+            purchaseOrderNumber: invoice.purchaseOrder?.orderNumber ?? null,
+            purchaseOrderRemaining:
+                invoice.purchaseOrder && invoice.purchaseOrder.invoicedAmount !== undefined
+                    ? Number(invoice.purchaseOrder.total) - Number(invoice.purchaseOrder.invoicedAmount ?? 0)
+                    : null,
+            createdAt: invoice.createdAt.toISOString(),
+            updatedAt: invoice.updatedAt.toISOString(),
+        };
+
+        return { success: true, data: serialized };
+    } catch (error) {
+        console.error("Failed to fetch invoice detail:", error);
+        return { success: false, error: "Failed to fetch invoice detail" };
+    }
+}
+
+export async function getNextInvoiceSequence(params: {
+    organizationId: string;
+    flow: InvoiceFlow;
+    letter: InvoiceLetter;
+    pointOfSale?: number;
+}) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    const pointOfSale = params.pointOfSale ?? 1;
+
+    const lastInvoice = await db.invoice.findFirst({
+        where: {
+            organizationId: params.organizationId,
+            flow: params.flow,
+            letter: params.letter,
+            pointOfSale,
+        },
+        orderBy: { number: "desc" },
+        select: { number: true },
+    });
+
+    const nextNumber = (lastInvoice?.number ?? 0) + 1;
+
+    return {
+        success: true,
+        data: {
+            pointOfSale,
+            nextNumber,
+        },
+    };
+}
+
 
 export async function createInvoice(data: {
     organizationId: string;
@@ -58,11 +257,111 @@ export async function createInvoice(data: {
         vatRate: number;
         total: number;
     }[];
+    purchaseOrderId?: string;
 }) {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
 
     try {
+        type InvoiceItemInput = {
+            productId?: string;
+            description: string;
+            quantity: number;
+            unitPrice: number;
+            vatRate: number;
+        };
+
+        let sourceItems: InvoiceItemInput[] = data.items;
+        let effectiveContactId = data.contactId;
+        let linkedPurchaseOrderId: string | null = null;
+        let purchaseOrderSnapshot: {
+            total: number;
+            invoicedAmount: number;
+            remainingAmount: number;
+        } | null = null;
+
+        if (data.purchaseOrderId) {
+            const purchaseOrder = await db.purchaseOrder.findUnique({
+                where: { id: data.purchaseOrderId },
+                include: {
+                    items: true,
+                    contact: true,
+                },
+            });
+
+            if (!purchaseOrder || purchaseOrder.organizationId !== data.organizationId) {
+                return {
+                    success: false,
+                    error: "La orden de compra seleccionada no es válida",
+                };
+            }
+
+            if (purchaseOrder.status !== "APPROVED") {
+                return {
+                    success: false,
+                    error: "La orden de compra debe estar aprobada para generar la factura",
+                };
+            }
+
+            const remainingAmount = Number(purchaseOrder.total) - Number(purchaseOrder.invoicedAmount ?? 0);
+            purchaseOrderSnapshot = {
+                total: Number(purchaseOrder.total),
+                invoicedAmount: Number(purchaseOrder.invoicedAmount ?? 0),
+                remainingAmount,
+            };
+
+            linkedPurchaseOrderId = purchaseOrder.id;
+            effectiveContactId = purchaseOrder.contactId;
+            sourceItems = purchaseOrder.items.map(item => ({
+                productId: item.productId ?? undefined,
+                description: item.description,
+                quantity: Number(item.quantity),
+                unitPrice: Number(item.unitPrice),
+                vatRate: Number(item.vatRate),
+            }));
+        }
+
+        if (!sourceItems.length) {
+            return {
+                success: false,
+                error: "La factura debe incluir al menos un ítem",
+            };
+        }
+
+        if (data.flow === 'PURCHASE' && !effectiveContactId) {
+            return {
+                success: false,
+                error: "Las facturas de compra deben tener un proveedor asignado",
+            };
+        }
+
+        const duplicateWhere: Prisma.InvoiceWhereInput = {
+            organizationId: data.organizationId,
+            letter: data.letter,
+            pointOfSale: data.pointOfSale,
+            number: data.number,
+            flow: data.flow,
+        };
+
+        if (data.flow === 'PURCHASE') {
+            duplicateWhere.contactId = effectiveContactId;
+        }
+
+        const duplicate = await db.invoice.findFirst({
+            where: duplicateWhere,
+            select: { id: true },
+        });
+
+        if (duplicate) {
+            const errorMessage = data.flow === 'SALE'
+                ? 'Ya existe una factura de venta con esa letra y número'
+                : 'Ya existe una factura de compra para este proveedor con esa letra y número';
+            return {
+                success: false,
+                error: errorMessage,
+            };
+        }
+
         // Get accounting configuration
         const config = await db.accountingConfig.findUnique({
             where: { organizationId: data.organizationId },
@@ -99,7 +398,7 @@ export async function createInvoice(data: {
         const itemsToCreate = [];
         const accountAggregates: Record<string, number> = {}; // AccountId -> Amount
 
-        for (const item of data.items) {
+        for (const item of sourceItems) {
             const lineNet = item.quantity * item.unitPrice;
             const lineVat = lineNet * (item.vatRate / 100);
 
@@ -157,8 +456,8 @@ export async function createInvoice(data: {
             contactAddress?: string | null;
         } = {};
 
-        if (data.contactId) {
-            const contact = await db.contact.findUnique({ where: { id: data.contactId } });
+        if (effectiveContactId) {
+            const contact = await db.contact.findUnique({ where: { id: effectiveContactId } });
             if (contact) {
                 contactSnapshot = {
                     contactName: contact.name,
@@ -259,12 +558,13 @@ export async function createInvoice(data: {
                 number: data.number,
                 date: data.date,
                 dueDate: data.dueDate,
-                contactId: data.contactId,
+                contactId: effectiveContactId,
                 ...contactSnapshot,
                 netAmount,
                 vatAmount,
                 totalAmount,
                 journalEntryId: journalEntry.id,
+                purchaseOrderId: linkedPurchaseOrderId ?? undefined,
                 items: {
                     create: itemsToCreate,
                 },
@@ -281,7 +581,22 @@ export async function createInvoice(data: {
         });
 
         revalidatePath("/dashboard/invoices");
+        revalidatePath("/dashboard/sales");
+        revalidatePath("/dashboard/purchases");
+        revalidatePath("/dashboard/purchases/orders");
         revalidatePath("/dashboard/accounting/journal");
+
+        if (linkedPurchaseOrderId) {
+            await db.purchaseOrder.update({
+                where: { id: linkedPurchaseOrderId },
+                data: {
+                    invoicedAmount: {
+                        increment: totalAmount,
+                    },
+                    invoicedAt: new Date(),
+                },
+            });
+        }
 
         // Convert Decimal to number for client components
         return {
