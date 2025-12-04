@@ -30,6 +30,17 @@ export async function getContactStatement(contactId: string) {
             orderBy: { date: 'desc' },
         });
 
+        // Get purchase orders if this contact is a vendor
+        const purchaseOrders = contact.type === 'VENDOR'
+            ? await db.purchaseOrder.findMany({
+                  where: { contactId },
+                  include: {
+                      invoices: true,
+                  },
+                  orderBy: { issueDate: 'desc' },
+              })
+            : [];
+
         // Get all payments for this contact's invoices
         const payments = await db.payment.findMany({
             where: {
@@ -101,6 +112,22 @@ export async function getContactStatement(contactId: string) {
             })),
         ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+        const serializedPurchaseOrders = purchaseOrders.map(po => {
+            const total = Number(po.total);
+            const invoiced = Number(po.invoicedAmount ?? 0);
+            return {
+                id: po.id,
+                orderNumber: po.orderNumber,
+                status: po.status,
+                issueDate: po.issueDate,
+                expectedDate: po.expectedDate,
+                total,
+                invoicedAmount: invoiced,
+                remainingAmount: total - invoiced,
+                invoicesCount: po.invoices.length,
+            };
+        });
+
         const balance = totalInvoiced - totalPaid;
 
         return {
@@ -108,6 +135,8 @@ export async function getContactStatement(contactId: string) {
             data: {
                 contact,
                 timeline,
+                invoices: serializedInvoices,
+                purchaseOrders: serializedPurchaseOrders,
                 summary: {
                     totalInvoiced,
                     totalPaid,

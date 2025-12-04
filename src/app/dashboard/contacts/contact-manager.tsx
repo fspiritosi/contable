@@ -20,6 +20,7 @@ export default function ContactManager({ initialContacts, organizationId, defaul
     const [isCreating, setIsCreating] = useState(false);
     const initialFilter = useMemo<ContactType | 'ALL'>(() => defaultType, [defaultType]);
     const [filter, setFilter] = useState<ContactType | 'ALL'>(initialFilter);
+    const [searchTerm, setSearchTerm] = useState("");
 
     const enforcedType = defaultType !== 'ALL' ? defaultType : undefined;
     const [newContact, setNewContact] = useState({
@@ -74,13 +75,20 @@ export default function ContactManager({ initialContacts, organizationId, defaul
         }
     }
 
-    const filteredContacts = contacts.filter(c => filter === 'ALL' || c.type === filter);
+    const filteredContacts = contacts.filter(c => {
+        if (filter !== 'ALL' && c.type !== filter) return false;
+        if (!searchTerm.trim()) return true;
+        const query = searchTerm.trim().toLowerCase();
+        const matchesName = c.name.toLowerCase().includes(query);
+        const matchesCuit = c.cuit?.toLowerCase().includes(query) ?? false;
+        return matchesName || matchesCuit;
+    });
 
     return (
         <div className="space-y-6">
             {!isCreating ? (
                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                    <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row justify-between items-center gap-4">
+                    <div className="p-4 border-b border-gray-200 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                         {!hideTypeFilters ? (
                             <div className="flex gap-2">
                                 <button
@@ -107,13 +115,24 @@ export default function ContactManager({ initialContacts, organizationId, defaul
                                 Mostrando {filter === 'CUSTOMER' ? 'Clientes' : filter === 'VENDOR' ? 'Proveedores' : 'Todos'}
                             </div>
                         )}
-                        <button
-                            onClick={() => setIsCreating(true)}
-                            className="flex items-center gap-2 text-sm bg-gray-900 text-white px-3 py-1.5 rounded-md hover:bg-gray-800 transition-colors"
-                        >
-                            <Plus className="h-4 w-4" />
-                            Nuevo Contacto
-                        </button>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end w-full lg:w-auto">
+                            <div className="relative w-full sm:w-64">
+                                <input
+                                    type="text"
+                                    value={searchTerm}
+                                    onChange={e => setSearchTerm(e.target.value)}
+                                    placeholder="Buscar por nombre o CUIT"
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                />
+                            </div>
+                            <button
+                                onClick={() => setIsCreating(true)}
+                                className="flex items-center justify-center gap-2 text-sm bg-gray-900 text-white px-3 py-1.5 rounded-md hover:bg-gray-800 transition-colors"
+                            >
+                                <Plus className="h-4 w-4" />
+                                Nuevo Contacto
+                            </button>
+                        </div>
                     </div>
 
                     <div className="divide-y divide-gray-200">

@@ -59,7 +59,8 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
     const [searchTerm, setSearchTerm] = useState("");
     const [sortKey, setSortKey] = useState<'date' | 'contact' | 'total' | 'number'>('date');
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-    const PAGE_SIZE = 10;
+    const PAGE_SIZE_OPTIONS = [10, 20, 50];
+    const [pageSize, setPageSize] = useState<number>(PAGE_SIZE_OPTIONS[0]);
     const [page, setPage] = useState(1);
 
     const enforcedFlow = defaultFlow !== 'ALL' ? defaultFlow : undefined;
@@ -288,12 +289,12 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
         return sorted;
     }, [invoices, filter, searchTerm, sortKey, sortDirection]);
 
-    const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / PAGE_SIZE));
-    const paginatedInvoices = filteredInvoices.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize));
+    const paginatedInvoices = filteredInvoices.slice((page - 1) * pageSize, page * pageSize);
 
     useEffect(() => {
         setPage(1);
-    }, [filter, searchTerm, sortKey, sortDirection]);
+    }, [filter, searchTerm, sortKey, sortDirection, pageSize]);
 
     const handleExportCsv = () => {
         if (!filteredInvoices.length) {
@@ -564,7 +565,7 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                 )}
                             </tbody>
                         </table>
-                        <div className="px-4 py-3 border-t border-gray-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between text-sm text-gray-600">
+                        <div className="px-4 py-3 border-t border-gray-200 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between text-sm text-gray-600">
                             <p>
                                 Mostrando
                                 <span className="font-medium"> {paginatedInvoices.length} </span>
@@ -572,32 +573,48 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                 <span className="font-medium"> {filteredInvoices.length} </span>
                                 facturas
                             </p>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setPage(prev => Math.max(1, prev - 1))}
-                                    disabled={page === 1}
-                                    className={cn(
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                                <div className="flex items-center gap-2 text-xs text-gray-500">
+                                    <span>Filas por página</span>
+                                    <select
+                                        value={pageSize}
+                                        onChange={e => setPageSize(Number(e.target.value))}
+                                        className="rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                    >
+                                        {[10, 20, 50, 100].map(option => (
+                                            <option key={option} value={option}>
+                                                {option}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setPage(prev => Math.max(1, prev - 1))}
+                                        disabled={page === 1}
+                                        className={cn(
                                         "px-3 py-1.5 rounded-md border text-xs font-medium",
                                         page === 1 ? "text-gray-400 border-gray-200 cursor-not-allowed" : "text-gray-700 border-gray-300 hover:bg-gray-50"
                                     )}
                                 >
                                     Anterior
                                 </button>
-                                <span className="text-xs text-gray-500">
-                                    Página {page} de {totalPages}
-                                </span>
-                                <button
-                                    type="button"
+                                    <span className="text-xs text-gray-500">
+                                        Página {page} de {totalPages}
+                                    </span>
+                                    <button
+                                        type="button"
                                     onClick={() => setPage(prev => Math.min(totalPages, prev + 1))}
                                     disabled={page === totalPages}
                                     className={cn(
                                         "px-3 py-1.5 rounded-md border text-xs font-medium",
                                         page === totalPages ? "text-gray-400 border-gray-200 cursor-not-allowed" : "text-gray-700 border-gray-300 hover:bg-gray-50"
                                     )}
-                                >
-                                    Siguiente
-                                </button>
+                                    >
+                                        Siguiente
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
