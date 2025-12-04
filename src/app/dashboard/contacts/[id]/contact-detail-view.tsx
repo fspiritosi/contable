@@ -76,6 +76,11 @@ const normalizeOrderNumber = (value: string | number | null | undefined) => {
     return String(value);
 };
 
+const getInvoiceDetailHref = (invoice: any) =>
+    invoice.flow === 'SALE'
+        ? `/dashboard/sales/${invoice.id}`
+        : `/dashboard/purchases/${invoice.id}`;
+
     const filteredOrders = useMemo(() => {
         const term = orderSearchTerm.trim().toLowerCase();
         const sorted = [...purchaseOrders]
@@ -181,6 +186,215 @@ const normalizeOrderNumber = (value: string | number | null | undefined) => {
             setInvoiceSortDirection('asc');
         }
     };
+
+    const purchaseOrdersTable = (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Órdenes de Compra</h3>
+                <span className="text-xs text-gray-500">{filteredOrders.length} registros</span>
+            </div>
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex flex-wrap gap-3">
+                <input
+                    type="text"
+                    placeholder="Buscar por número"
+                    value={orderSearchTerm}
+                    onChange={(e) => setOrderSearchTerm(e.target.value)}
+                    className="flex-1 min-w-[160px] rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
+                />
+                <input
+                    type="date"
+                    value={orderDateFilter}
+                    onChange={(e) => setOrderDateFilter(e.target.value)}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
+                />
+                {(orderSearchTerm || orderDateFilter) && (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setOrderSearchTerm('');
+                            setOrderDateFilter('');
+                        }}
+                        className="text-sm text-gray-600 hover:text-gray-900"
+                    >
+                        Limpiar filtros
+                    </button>
+                )}
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                    <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200">
+                        <tr>
+                            <th className="px-4 py-3">
+                                <button type="button" className="flex items-center gap-1" onClick={() => handleOrderSort('orderNumber')}>
+                                    Orden {renderSortIndicator(orderSortKey === 'orderNumber', orderSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3">
+                                <button type="button" className="flex items-center gap-1" onClick={() => handleOrderSort('issueDate')}>
+                                    Fecha {renderSortIndicator(orderSortKey === 'issueDate', orderSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3">
+                                <button type="button" className="flex items-center gap-1" onClick={() => handleOrderSort('status')}>
+                                    Estado {renderSortIndicator(orderSortKey === 'status', orderSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3 text-right">
+                                <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleOrderSort('total')}>
+                                    Total {renderSortIndicator(orderSortKey === 'total', orderSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3 text-right">
+                                <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleOrderSort('invoicedAmount')}>
+                                    Facturado {renderSortIndicator(orderSortKey === 'invoicedAmount', orderSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3 text-right">
+                                <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleOrderSort('remainingAmount')}>
+                                    Saldo {renderSortIndicator(orderSortKey === 'remainingAmount', orderSortDirection)}
+                                </button>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                        {filteredOrders.length === 0 ? (
+                            <tr>
+                                <td colSpan={6} className="p-6 text-center text-gray-500">Sin órdenes de compra asociadas.</td>
+                            </tr>
+                        ) : (
+                            filteredOrders.map((order: any) => (
+                                <tr key={order.id} className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-4 py-3 font-mono text-xs text-gray-900">
+                                        <Link href={`/dashboard/purchases/orders/${order.id}`} className="text-blue-600 hover:text-blue-800 hover:underline">
+                                            #{order.orderNumber}
+                                        </Link>
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-600">{new Date(order.issueDate).toLocaleDateString('es-AR')}</td>
+                                    <td className="px-4 py-3">
+                                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ${order.status === 'APPROVED'
+                                            ? 'bg-green-50 text-green-700 border border-green-100'
+                                            : order.status === 'PENDING'
+                                                ? 'bg-amber-50 text-amber-700 border border-amber-100'
+                                                : 'bg-gray-100 text-gray-700 border border-gray-200'
+                                        }`}>
+                                            {order.status === 'APPROVED'
+                                                ? 'Aprobada'
+                                                : order.status === 'PENDING'
+                                                    ? 'Pendiente'
+                                                    : order.status === 'REJECTED'
+                                                        ? 'Rechazada'
+                                                        : order.status}
+                                        </span>
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-gray-900">${order.total.toFixed(2)}</td>
+                                    <td className="px-4 py-3 text-right text-gray-600">${order.invoicedAmount.toFixed(2)}</td>
+                                    <td className={`px-4 py-3 text-right font-medium ${order.remainingAmount > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                                        ${order.remainingAmount.toFixed(2)}
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+
+    const invoicesTable = (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Facturas</h3>
+                <span className="text-xs text-gray-500">{filteredInvoices.length} comprobantes</span>
+            </div>
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex flex-wrap gap-3">
+                <input
+                    type="text"
+                    placeholder="Buscar por número"
+                    value={invoiceSearchTerm}
+                    onChange={(e) => setInvoiceSearchTerm(e.target.value)}
+                    className="flex-1 min-w-[160px] rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
+                />
+                <input
+                    type="date"
+                    value={invoiceDateFilter}
+                    onChange={(e) => setInvoiceDateFilter(e.target.value)}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
+                />
+                {(invoiceSearchTerm || invoiceDateFilter) && (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setInvoiceSearchTerm('');
+                            setInvoiceDateFilter('');
+                        }}
+                        className="text-sm text-gray-600 hover:text-gray-900"
+                    >
+                        Limpiar filtros
+                    </button>
+                )}
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                    <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200">
+                        <tr>
+                            <th className="px-4 py-3">
+                                <button type="button" className="flex items-center gap-1" onClick={() => handleInvoiceSort('number')}>
+                                    Comprobante {renderSortIndicator(invoiceSortKey === 'number', invoiceSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3">
+                                <button type="button" className="flex items-center gap-1" onClick={() => handleInvoiceSort('date')}>
+                                    Fecha {renderSortIndicator(invoiceSortKey === 'date', invoiceSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3">
+                                <button type="button" className="flex items-center gap-1" onClick={() => handleInvoiceSort('status')}>
+                                    Estado {renderSortIndicator(invoiceSortKey === 'status', invoiceSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3 text-right">
+                                <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleInvoiceSort('total')}>
+                                    Total {renderSortIndicator(invoiceSortKey === 'total', invoiceSortDirection)}
+                                </button>
+                            </th>
+                            <th className="px-4 py-3 text-right">
+                                <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleInvoiceSort('balance')}>
+                                    Saldo {renderSortIndicator(invoiceSortKey === 'balance', invoiceSortDirection)}
+                                </button>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                        {filteredInvoices.length === 0 ? (
+                            <tr>
+                                <td colSpan={5} className="p-6 text-center text-gray-500">Todavía no registraste facturas.</td>
+                            </tr>
+                        ) : (
+                            filteredInvoices.map((invoice: any) => (
+                                <tr key={invoice.id} className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-4 py-3 font-mono text-xs text-gray-900">
+                                        <Link href={getInvoiceDetailHref(invoice)} className="text-blue-600 hover:text-blue-800 hover:underline">
+                                            {formatInvoiceNumber(invoice)}
+                                        </Link>
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-600">{new Date(invoice.date).toLocaleDateString('es-AR')}</td>
+                                    <td className="px-4 py-3">
+                                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ${invoice.isPaid ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-amber-50 text-amber-700 border border-amber-100'}`}>
+                                            {invoice.isPaid ? 'Pagada' : 'Pendiente'}
+                                        </span>
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-gray-900">${invoice.totalAmount.toFixed(2)}</td>
+                                    <td className={`px-4 py-3 text-right font-medium ${invoice.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                        ${invoice.balance.toFixed(2)}
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
 
     return (
         <div className="space-y-6">
@@ -377,206 +591,10 @@ const normalizeOrderNumber = (value: string | number | null | undefined) => {
                 )}
             </div>
 
-            {contact.type === 'VENDOR' && (
-                <div className="grid gap-6 lg:grid-cols-2">
-                    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                            <h3 className="font-semibold text-gray-900">Órdenes de Compra</h3>
-                            <span className="text-xs text-gray-500">{filteredOrders.length} registros</span>
-                        </div>
-                        <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex flex-wrap gap-3">
-                            <input
-                                type="text"
-                                placeholder="Buscar por número"
-                                value={orderSearchTerm}
-                                onChange={(e) => setOrderSearchTerm(e.target.value)}
-                                className="flex-1 min-w-[160px] rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
-                            />
-                            <input
-                                type="date"
-                                value={orderDateFilter}
-                                onChange={(e) => setOrderDateFilter(e.target.value)}
-                                className="rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
-                            />
-                            {(orderSearchTerm || orderDateFilter) && (
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setOrderSearchTerm('');
-                                        setOrderDateFilter('');
-                                    }}
-                                    className="text-sm text-gray-600 hover:text-gray-900"
-                                >
-                                    Limpiar filtros
-                                </button>
-                            )}
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200">
-                                    <tr>
-                                        <th className="px-4 py-3">
-                                            <button type="button" className="flex items-center gap-1" onClick={() => handleOrderSort('orderNumber')}>
-                                                Orden {renderSortIndicator(orderSortKey === 'orderNumber', orderSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3">
-                                            <button type="button" className="flex items-center gap-1" onClick={() => handleOrderSort('issueDate')}>
-                                                Fecha {renderSortIndicator(orderSortKey === 'issueDate', orderSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3">
-                                            <button type="button" className="flex items-center gap-1" onClick={() => handleOrderSort('status')}>
-                                                Estado {renderSortIndicator(orderSortKey === 'status', orderSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3 text-right">
-                                            <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleOrderSort('total')}>
-                                                Total {renderSortIndicator(orderSortKey === 'total', orderSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3 text-right">
-                                            <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleOrderSort('invoicedAmount')}>
-                                                Facturado {renderSortIndicator(orderSortKey === 'invoicedAmount', orderSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3 text-right">
-                                            <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleOrderSort('remainingAmount')}>
-                                                Saldo {renderSortIndicator(orderSortKey === 'remainingAmount', orderSortDirection)}
-                                            </button>
-                                        </th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-200">
-                                    {filteredOrders.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={6} className="p-6 text-center text-gray-500">Sin órdenes de compra asociadas.</td>
-                                        </tr>
-                                    ) : (
-                                        filteredOrders.map((order: any) => (
-                                            <tr key={order.id} className="hover:bg-gray-50 transition-colors">
-                                                <td className="px-4 py-3 font-mono text-xs text-gray-900">#{order.orderNumber}</td>
-                                                <td className="px-4 py-3 text-gray-600">{new Date(order.issueDate).toLocaleDateString('es-AR')}</td>
-                                                <td className="px-4 py-3">
-                                                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ${order.status === 'APPROVED'
-                                                        ? 'bg-green-50 text-green-700 border border-green-100'
-                                                        : order.status === 'PENDING'
-                                                            ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                                                            : 'bg-gray-100 text-gray-700 border border-gray-200'
-                                                    }`}>
-                                                        {order.status === 'APPROVED'
-                                                            ? 'Aprobada'
-                                                            : order.status === 'PENDING'
-                                                                ? 'Pendiente'
-                                                                : order.status === 'REJECTED'
-                                                                    ? 'Rechazada'
-                                                                    : order.status}
-                                                    </span>
-                                                </td>
-                                                <td className="px-4 py-3 text-right text-gray-900">${order.total.toFixed(2)}</td>
-                                                <td className="px-4 py-3 text-right text-gray-600">${order.invoicedAmount.toFixed(2)}</td>
-                                                <td className={`px-4 py-3 text-right font-medium ${order.remainingAmount > 0 ? 'text-amber-600' : 'text-green-600'}`}>
-                                                    ${order.remainingAmount.toFixed(2)}
-                                                </td>
-                                            </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow_hidden">
-                        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                            <h3 className="font-semibold text-gray-900">Facturas</h3>
-                            <span className="text-xs text-gray-500">{filteredInvoices.length} comprobantes</span>
-                        </div>
-                        <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex flex-wrap gap-3">
-                            <input
-                                type="text"
-                                placeholder="Buscar por número"
-                                value={invoiceSearchTerm}
-                                onChange={(e) => setInvoiceSearchTerm(e.target.value)}
-                                className="flex-1 min-w-[160px] rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
-                            />
-                            <input
-                                type="date"
-                                value={invoiceDateFilter}
-                                onChange={(e) => setInvoiceDateFilter(e.target.value)}
-                                className="rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
-                            />
-                            {(invoiceSearchTerm || invoiceDateFilter) && (
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setInvoiceSearchTerm('');
-                                        setInvoiceDateFilter('');
-                                    }}
-                                    className="text-sm text-gray-600 hover:text-gray-900"
-                                >
-                                    Limpiar filtros
-                                </button>
-                            )}
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200">
-                                    <tr>
-                                        <th className="px-4 py-3">
-                                            <button type="button" className="flex items-center gap-1" onClick={() => handleInvoiceSort('number')}>
-                                                Comprobante {renderSortIndicator(invoiceSortKey === 'number', invoiceSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3">
-                                            <button type="button" className="flex items-center gap-1" onClick={() => handleInvoiceSort('date')}>
-                                                Fecha {renderSortIndicator(invoiceSortKey === 'date', invoiceSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3">
-                                            <button type="button" className="flex items-center gap-1" onClick={() => handleInvoiceSort('status')}>
-                                                Estado {renderSortIndicator(invoiceSortKey === 'status', invoiceSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3 text-right">
-                                            <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleInvoiceSort('total')}>
-                                                Total {renderSortIndicator(invoiceSortKey === 'total', invoiceSortDirection)}
-                                            </button>
-                                        </th>
-                                        <th className="px-4 py-3 text-right">
-                                            <button type="button" className="flex items-center gap-1 ml-auto" onClick={() => handleInvoiceSort('balance')}>
-                                                Saldo {renderSortIndicator(invoiceSortKey === 'balance', invoiceSortDirection)}
-                                            </button>
-                                        </th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-200">
-                                    {filteredInvoices.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={5} className="p-6 text-center text-gray-500">Todavía no registraste facturas.</td>
-                                        </tr>
-                                    ) : (
-                                        filteredInvoices.map((invoice: any) => (
-                                            <tr key={invoice.id} className="hover:bg-gray-50 transition-colors">
-                                                <td className="px-4 py-3 font-mono text-xs text-gray-900">{formatInvoiceNumber(invoice)}</td>
-                                                <td className="px-4 py-3 text-gray-600">{new Date(invoice.date).toLocaleDateString('es-AR')}</td>
-                                                <td className="px-4 py-3">
-                                                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ${invoice.isPaid ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-amber-50 text-amber-700 border border-amber-100'}`}>
-                                                        {invoice.isPaid ? 'Pagada' : 'Pendiente'}
-                                                    </span>
-                                                </td>
-                                                <td className="px-4 py-3 text-right text-gray-900">${invoice.totalAmount.toFixed(2)}</td>
-                                                <td className={`px-4 py-3 text-right font-medium ${invoice.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                                    ${invoice.balance.toFixed(2)}
-                                                </td>
-                                            </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <div className={`grid gap-6 ${contact.type === 'VENDOR' ? 'lg:grid-cols-2' : ''}`}>
+                {contact.type === 'VENDOR' && purchaseOrdersTable}
+                {invoicesTable}
+            </div>
         </div>
     );
 }
