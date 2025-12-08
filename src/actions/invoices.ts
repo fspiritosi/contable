@@ -96,6 +96,7 @@ export async function getInvoices(organizationId: string, flow?: InvoiceFlow) {
             const balance = totalAmount - paidAmount;
             const isPaid = Math.abs(balance) < 0.01;
             const isPartial = !isPaid && paidAmount > 0.01;
+            const paymentStatus: 'PAID' | 'PARTIAL' | 'PENDING' = isPaid ? 'PAID' : isPartial ? 'PARTIAL' : 'PENDING';
 
             return {
                 ...inv,
@@ -104,7 +105,7 @@ export async function getInvoices(organizationId: string, flow?: InvoiceFlow) {
                 totalAmount,
                 paidAmount,
                 balance,
-                paymentStatus: isPaid ? 'PAID' : isPartial ? 'PARTIAL' : 'PENDING',
+                paymentStatus,
                 items: inv.items.map(item => ({
                     ...item,
                     quantity: Number(item.quantity),

@@ -35,24 +35,41 @@ export async function getPayments(organizationId: string, type?: PaymentType) {
         });
 
         // Serialize Decimal fields
-        const serializedPayments = payments.map(payment => ({
-            ...payment,
-            amount: Number(payment.amount),
-            invoice: payment.invoice ? {
-                ...payment.invoice,
-                netAmount: Number(payment.invoice.netAmount),
-                vatAmount: Number(payment.invoice.vatAmount),
-                totalAmount: Number(payment.invoice.totalAmount),
-            } : null,
-            journalEntry: payment.journalEntry ? {
-                ...payment.journalEntry,
-                lines: payment.journalEntry.lines.map((line: any) => ({
-                    ...line,
-                    debit: Number(line.debit),
-                    credit: Number(line.credit),
-                })),
-            } : null,
-        }));
+        const serializedPayments = payments.map(payment => {
+            const contact = payment.invoice?.contact;
+
+            return {
+                ...payment,
+                amount: Number(payment.amount),
+                date: payment.date instanceof Date ? payment.date.toISOString() : payment.date,
+                createdAt: payment.createdAt instanceof Date ? payment.createdAt.toISOString() : payment.createdAt,
+                updatedAt: payment.updatedAt instanceof Date ? payment.updatedAt.toISOString() : payment.updatedAt,
+                invoice: payment.invoice ? {
+                    ...payment.invoice,
+                    netAmount: Number(payment.invoice.netAmount),
+                    vatAmount: Number(payment.invoice.vatAmount),
+                    totalAmount: Number(payment.invoice.totalAmount),
+                    pointOfSale: Number(payment.invoice.pointOfSale),
+                    number: Number(payment.invoice.number),
+                    contactName: contact?.name ?? null,
+                    contact: contact
+                        ? {
+                            ...contact,
+                            createdAt: contact.createdAt instanceof Date ? contact.createdAt.toISOString() : contact.createdAt,
+                            updatedAt: contact.updatedAt instanceof Date ? contact.updatedAt.toISOString() : contact.updatedAt,
+                        }
+                        : null,
+                } : null,
+                journalEntry: payment.journalEntry ? {
+                    ...payment.journalEntry,
+                    lines: payment.journalEntry.lines.map((line: any) => ({
+                        ...line,
+                        debit: Number(line.debit),
+                        credit: Number(line.credit),
+                    })),
+                } : null,
+            };
+        });
 
         return { success: true, data: serializedPayments };
     } catch (error: any) {
