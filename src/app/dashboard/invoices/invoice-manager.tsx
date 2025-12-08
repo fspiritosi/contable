@@ -21,6 +21,27 @@ type SerializedInvoiceItem = Omit<InvoiceItem, 'quantity' | 'unitPrice' | 'vatRa
     total: number;
 };
 
+const PAYMENT_STATUS_STYLES: Record<InvoicePaymentStatus, { label: string; badgeClass: string }> = {
+    PAID: {
+        label: 'Pagada',
+        badgeClass: 'bg-green-50 text-green-700 border border-green-200',
+    },
+    PARTIAL: {
+        label: 'Pago parcial',
+        badgeClass: 'bg-sky-50 text-sky-700 border border-sky-200',
+    },
+    PENDING: {
+        label: 'Pendiente',
+        badgeClass: 'bg-amber-50 text-amber-700 border border-amber-200',
+    },
+};
+
+const STATUS_WEIGHT: Record<InvoicePaymentStatus, number> = {
+    PENDING: 0,
+    PARTIAL: 1,
+    PAID: 2,
+};
+
 type SerializedAttachment = {
     id: string;
     name: string;
@@ -30,6 +51,8 @@ type SerializedAttachment = {
     createdAt: string;
 };
 
+type InvoicePaymentStatus = 'PENDING' | 'PARTIAL' | 'PAID';
+
 type SerializedInvoice = Omit<Invoice, 'netAmount' | 'vatAmount' | 'totalAmount'> & {
     netAmount: number;
     vatAmount: number;
@@ -37,6 +60,29 @@ type SerializedInvoice = Omit<Invoice, 'netAmount' | 'vatAmount' | 'totalAmount'
     contact: Contact | null;
     items: SerializedInvoiceItem[];
     attachments?: SerializedAttachment[];
+    paidAmount: number;
+    balance: number;
+    paymentStatus: InvoicePaymentStatus;
+};
+
+type InvoiceFormItem = {
+    productId: string;
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    vatRate: number;
+    purchaseOrderItemId?: string;
+};
+
+type InvoiceFormState = {
+    flow: InvoiceFlow;
+    letter: InvoiceLetter;
+    pointOfSale: number;
+    number: number;
+    date: string;
+    dueDate: string;
+    contactId: string;
+    items: InvoiceFormItem[];
 };
 
 interface InvoiceManagerProps {
@@ -57,14 +103,14 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
     const [filter, setFilter] = useState<InvoiceFlow | 'ALL'>(initialFilter);
     const [activeAttachmentInvoiceId, setActiveAttachmentInvoiceId] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
-    const [sortKey, setSortKey] = useState<'date' | 'contact' | 'total' | 'number'>('date');
+    const [sortKey, setSortKey] = useState<'date' | 'contact' | 'total' | 'number' | 'status' | 'balance'>('date');
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
     const PAGE_SIZE_OPTIONS = [10, 20, 50];
     const [pageSize, setPageSize] = useState<number>(PAGE_SIZE_OPTIONS[0]);
     const [page, setPage] = useState(1);
 
     const enforcedFlow = defaultFlow !== 'ALL' ? defaultFlow : undefined;
-    const [newInvoice, setNewInvoice] = useState({
+    const [newInvoice, setNewInvoice] = useState<InvoiceFormState>({
         flow: (enforcedFlow ?? "SALE") as InvoiceFlow,
         letter: "A" as InvoiceLetter,
         pointOfSale: 1,
@@ -82,6 +128,10 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
         if (!selectedPurchaseOrderId) return null;
         return purchaseOrders.find(order => order.id === selectedPurchaseOrderId) ?? null;
     }, [purchaseOrders, selectedPurchaseOrderId]);
+    const purchaseOrderItemsById = useMemo(() => {
+        if (!selectedPurchaseOrder) return new Map<string, SerializedPurchaseOrder['items'][number]>();
+        return new Map(selectedPurchaseOrder.items.map(item => [item.id, item]));
+    }, [selectedPurchaseOrder]);
     const availablePurchaseOrders = useMemo(() => {
         const eligible = purchaseOrders.filter(order => order.remainingAmount > 0.01);
         if (!newInvoice.contactId) return eligible;
@@ -156,9 +206,10 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                 items: selectedPurchaseOrder.items.map(item => ({
                     productId: item.productId || "",
                     description: item.description,
-                    quantity: item.quantity,
-                    unitPrice: item.unitPrice,
-                    vatRate: item.vatRate,
+                    quantity: Number(item.quantity),
+                    unitPrice: Number(item.unitPrice),
+                    vatRate: Number(item.vatRate),
+                    purchaseOrderItemId: item.id,
                 })),
             }));
         }
@@ -203,19 +254,30 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
 
     const updateItem = (index: number, field: string, value: any) => {
         const newItems = [...newInvoice.items];
-        newItems[index] = { ...newItems[index], [field]: value };
+        let nextValue: any = value;
+        if (["quantity", "unitPrice", "vatRate"].includes(field)) {
+            const parsed = typeof value === "string" && value !== "" ? Number(value) : Number(value) || 0;
+            nextValue = Number.isFinite(parsed) ? parsed : 0;
+        }
+        newItems[index] = { ...newItems[index], [field]: nextValue };
         setNewInvoice({ ...newInvoice, items: newItems });
     };
 
     const addItem = () => {
-        setNewInvoice({ ...newInvoice, items: [...newInvoice.items, { productId: "", description: "", quantity: 1, unitPrice: 0, vatRate: 21 }] });
+        if (selectedPurchaseOrderId) return;
+        setNewInvoice({
+            ...newInvoice,
+            items: [...newInvoice.items, { productId: "", description: "", quantity: 1, unitPrice: 0, vatRate: 21, purchaseOrderItemId: undefined }],
+        });
     };
 
     const removeItem = (index: number) => {
+        if (selectedPurchaseOrderId) return;
         setNewInvoice({ ...newInvoice, items: newInvoice.items.filter((_, i) => i !== index) });
     };
 
     const handleProductSelect = (index: number, productId: string) => {
+        if (selectedPurchaseOrderId) return;
         const product = products.find(p => p.id === productId);
         if (product) {
             const newItems = [...newInvoice.items];
@@ -273,6 +335,12 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                 }
                 case 'total':
                     comparison = Number(a.totalAmount) - Number(b.totalAmount);
+                    break;
+                case 'status':
+                    comparison = STATUS_WEIGHT[a.paymentStatus] - STATUS_WEIGHT[b.paymentStatus];
+                    break;
+                case 'balance':
+                    comparison = Number(a.balance) - Number(b.balance);
                     break;
                 case 'number':
                     comparison = Number(a.number) - Number(b.number);
@@ -444,6 +512,16 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                     <th className="px-4 py-3">
                                         <button
                                             type="button"
+                                            onClick={() => handleSort('status')}
+                                            className="flex items-center gap-1 font-medium text-gray-600"
+                                        >
+                                            Estado
+                                            <ArrowUpDown className={cn("h-3.5 w-3.5", sortKey === 'status' ? "text-gray-900" : "text-gray-300")} />
+                                        </button>
+                                    </th>
+                                    <th className="px-4 py-3">
+                                        <button
+                                            type="button"
                                             onClick={() => handleSort('contact')}
                                             className="flex items-center gap-1 font-medium text-gray-600"
                                         >
@@ -491,6 +569,16 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                             <ArrowUpDown className={cn("h-3.5 w-3.5", sortKey === 'total' ? "text-gray-900" : "text-gray-300")} />
                                         </button>
                                     </th>
+                                    <th className="px-4 py-3 text-right">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSort('balance')}
+                                            className="flex items-center gap-1 font-medium text-gray-600 ml-auto"
+                                        >
+                                            Saldo
+                                            <ArrowUpDown className={cn("h-3.5 w-3.5", sortKey === 'balance' ? "text-gray-900" : "text-gray-300")} />
+                                        </button>
+                                    </th>
                                     <th className="px-4 py-3 text-center">Adjuntos</th>
                                     <th className="px-4 py-3 text-right">Acciones</th>
                                 </tr>
@@ -527,6 +615,14 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                                     {new Date(invoice.date).toLocaleDateString('es-AR')}
                                                 </td>
                                                 <td className="px-4 py-3">
+                                                    <div className={cn(
+                                                        "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium border",
+                                                        PAYMENT_STATUS_STYLES[invoice.paymentStatus]?.badgeClass ?? 'bg-gray-100 text-gray-600 border-gray-200'
+                                                    )}>
+                                                        {PAYMENT_STATUS_STYLES[invoice.paymentStatus]?.label ?? invoice.paymentStatus}
+                                                    </div>
+                                                </td>
+                                                <td className="px-4 py-3">
                                                     <p className="font-medium text-gray-900">{invoice.contactName || invoice.contact?.name || 'Consumidor Final'}</p>
                                                 </td>
                                                 <td className="px-4 py-3 text-gray-600 text-sm">
@@ -540,6 +636,12 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                                 </td>
                                                 <td className="px-4 py-3 text-right font-semibold text-gray-900">
                                                     ${Number(invoice.totalAmount).toFixed(2)}
+                                                </td>
+                                                <td className={cn(
+                                                    "px-4 py-3 text-right font-semibold",
+                                                    Number(invoice.balance) > 0.01 ? 'text-red-600' : 'text-green-600'
+                                                )}>
+                                                    ${Number(invoice.balance).toFixed(2)}
                                                 </td>
                                                 <td className="px-4 py-3 text-center">
                                                     <button
@@ -830,6 +932,19 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                                     value={item.quantity}
                                                     onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value))}
                                                 />
+                                                {item.purchaseOrderItemId && purchaseOrderItemsById.has(item.purchaseOrderItemId) && (
+                                                    (() => {
+                                                        const linkedPoItem = purchaseOrderItemsById.get(item.purchaseOrderItemId)!;
+                                                        const orderedQty = Number(linkedPoItem.quantity) || 0;
+                                                        const currentQty = Number(item.quantity) || 0;
+                                                        const remainingQty = Math.max(0, orderedQty - currentQty);
+                                                        return (
+                                                            <p className="mt-1 text-[11px] text-gray-500 text-right">
+                                                                Pedido: {orderedQty.toLocaleString('es-AR')} · Disponible: {remainingQty.toLocaleString('es-AR')}
+                                                            </p>
+                                                        );
+                                                    })()
+                                                )}
                                             </td>
                                             <td className="p-2">
                                                 <input
@@ -893,10 +1008,17 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                             <button
                                 type="button"
                                 onClick={addItem}
-                                className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-md text-sm font-medium hover:bg-gray-50 text-gray-700"
+                                className={cn(
+                                    "flex items-center gap-1 text-sm",
+                                    selectedPurchaseOrderId
+                                        ? "text-gray-400 cursor-not-allowed"
+                                        : "text-gray-600 hover:text-gray-900",
+                                )}
+                                disabled={Boolean(selectedPurchaseOrderId)}
+                                title={selectedPurchaseOrderId ? "No podés agregar ítems manuales cuando la factura está vinculada a una orden" : undefined}
                             >
                                 <Plus className="h-4 w-4" />
-                                Agregar Item
+                                Agregar ítem
                             </button>
                             <button
                                 type="submit"

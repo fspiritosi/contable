@@ -3,7 +3,7 @@
 import { db } from "@/lib/db";
 import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
-import { PurchaseOrderStatus } from "@prisma/client";
+import { InvoiceFlow, InvoiceLetter, PurchaseOrderStatus } from "@prisma/client";
 
 export type SerializedPurchaseOrderItem = {
   id: string;
@@ -13,6 +13,8 @@ export type SerializedPurchaseOrderItem = {
   unitPrice: number;
   vatRate: number;
   total: number;
+  invoicedQuantity: number;
+  availableQuantity: number;
 };
 
 export type SerializedPurchaseOrder = {
@@ -42,6 +44,20 @@ export type SerializedPurchaseOrder = {
   updatedAt: string;
 };
 
+export type SerializedPurchaseOrderDetail = SerializedPurchaseOrder & {
+  linkedInvoices: Array<{
+    id: string;
+    flow: InvoiceFlow;
+    letter: InvoiceLetter;
+    pointOfSale: number;
+    number: number;
+    date: string;
+    totalAmount: number;
+    contactId: string | null;
+    contactName: string | null;
+  }>;
+};
+
 function serializePurchaseOrder(order: any): SerializedPurchaseOrder {
   return {
     id: order.id,
@@ -58,21 +74,84 @@ function serializePurchaseOrder(order: any): SerializedPurchaseOrder {
     total: Number(order.total),
     invoicedAmount: Number(order.invoicedAmount ?? 0),
     remainingAmount: Number(order.total) - Number(order.invoicedAmount ?? 0),
-    items: order.items.map((item: any) => ({
-      id: item.id,
-      productId: item.productId,
-      description: item.description,
-      quantity: Number(item.quantity),
-      unitPrice: Number(item.unitPrice),
-      vatRate: Number(item.vatRate),
-      total: Number(item.total),
-    })),
+    items: order.items.map((item: any) => {
+      const invoicedQuantity = (item.invoiceItems ?? []).reduce(
+        (sum: number, invoiceItem: any) => sum + Number(invoiceItem.quantity),
+        0,
+      );
+      const orderedQuantity = Number(item.quantity);
+      const availableQuantity = Math.max(0, orderedQuantity - invoicedQuantity);
+
+      return {
+        id: item.id,
+        productId: item.productId,
+        description: item.description,
+        quantity: orderedQuantity,
+        unitPrice: Number(item.unitPrice),
+        vatRate: Number(item.vatRate),
+        total: Number(item.total),
+        invoicedQuantity,
+        availableQuantity,
+      };
+    }),
     invoiceIds: order.invoices?.map((inv: any) => inv.id) ?? [],
     invoiceId: order.invoices?.[order.invoices.length - 1]?.id ?? null,
     invoicedAt: order.invoicedAt ? order.invoicedAt.toISOString() : null,
     createdAt: order.createdAt.toISOString(),
     updatedAt: order.updatedAt.toISOString(),
   };
+}
+
+export async function getPurchaseOrderDetail(organizationId: string, orderId: string) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthorized");
+
+  try {
+    const order = await db.purchaseOrder.findFirst({
+      where: { id: orderId, organizationId },
+      include: {
+        contact: true,
+        items: {
+          include: {
+            invoiceItems: true,
+          },
+        },
+        invoices: {
+          include: {
+            contact: true,
+          },
+          orderBy: { date: "desc" },
+        },
+      },
+    });
+
+    if (!order) {
+      return { success: false, error: "Orden de compra no encontrada" };
+    }
+
+    const base = serializePurchaseOrder(order);
+    const linkedInvoices = order.invoices.map(inv => ({
+      id: inv.id,
+      flow: inv.flow,
+      letter: inv.letter,
+      pointOfSale: inv.pointOfSale,
+      number: inv.number,
+      date: inv.date.toISOString(),
+      totalAmount: Number(inv.totalAmount),
+      contactId: inv.contactId,
+      contactName: inv.contact?.name ?? null,
+    }));
+
+    const detail: SerializedPurchaseOrderDetail = {
+      ...base,
+      linkedInvoices,
+    };
+
+    return { success: true, data: detail };
+  } catch (error) {
+    console.error("Failed to fetch purchase order detail:", error);
+    return { success: false, error: "Failed to fetch purchase order detail" };
+  }
 }
 
 export async function getPurchaseOrders(organizationId: string, status?: PurchaseOrderStatus) {
@@ -87,7 +166,11 @@ export async function getPurchaseOrders(organizationId: string, status?: Purchas
       },
       include: {
         contact: true,
-        items: true,
+        items: {
+          include: {
+            invoiceItems: true,
+          },
+        },
         invoices: { select: { id: true } },
       },
       orderBy: { createdAt: "desc" },
@@ -147,7 +230,15 @@ export async function createPurchaseOrder(data: {
           })),
         },
       },
-      include: { contact: true, items: true, invoices: { select: { id: true } } },
+      include: {
+        contact: true,
+        items: {
+          include: {
+            invoiceItems: true,
+          },
+        },
+        invoices: { select: { id: true } },
+      },
     });
 
     revalidatePath("/dashboard/purchases");
@@ -172,7 +263,15 @@ export async function updatePurchaseOrderStatus(params: { orderId: string; statu
         approvedAt: params.status === "APPROVED" ? new Date() : null,
         rejectedAt: params.status === "REJECTED" ? new Date() : null,
       },
-      include: { contact: true, items: true, invoices: { select: { id: true } } },
+      include: {
+        contact: true,
+        items: {
+          include: {
+            invoiceItems: true,
+          },
+        },
+        invoices: { select: { id: true } },
+      },
     });
 
     revalidatePath("/dashboard/purchases");
@@ -201,7 +300,11 @@ export async function getInvoiceReadyPurchaseOrders(organizationId: string) {
       },
       include: {
         contact: true,
-        items: true,
+        items: {
+          include: {
+            invoiceItems: true,
+          },
+        },
         invoices: { select: { id: true } },
       },
       orderBy: { createdAt: "desc" },

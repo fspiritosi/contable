@@ -1,11 +1,6 @@
-import { getContacts } from "@/actions/contacts";
-import { getActiveOrganizationId } from "@/lib/organization";
-import ContactManager from "../contacts/contact-manager";
+import CustomerContactManager from "../contacts/customer-contact-manager";
 
 export default async function ClientsPage() {
-    const organizationId = await getActiveOrganizationId();
-    const { data } = await getContacts(organizationId, "CUSTOMER");
-
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -15,12 +10,7 @@ export default async function ClientsPage() {
                 </div>
             </div>
 
-            <ContactManager
-                initialContacts={data || []}
-                organizationId={organizationId}
-                defaultType="CUSTOMER"
-                hideTypeFilters
-            />
+            <CustomerContactManager />
         </div>
     );
 }

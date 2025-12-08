@@ -5,50 +5,116 @@ import { createPayment } from "@/actions/payments";
 import { Plus, DollarSign, TrendingDown, TrendingUp, Calendar, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { parseLocalDate } from "@/lib/date-utils";
+import { formatCurrency, formatInvoiceNumber } from "@/lib/utils";
+import { SimpleTable, SimpleTableHeader } from "@/components/pui/simpleTable";
+import { InvoiceLetter } from "@prisma/client";
+import Link from "next/link";
+import { TableFilters } from "@/components/pui/tableFilters";
+
+type PaymentTypeOption = 'PAYMENT' | 'COLLECTION';
+type PaymentMethodOption = 'CASH' | 'BANK_TRANSFER' | 'CHECK' | 'CREDIT_CARD' | 'DEBIT_CARD' | 'OTHER';
+
+type PaymentInvoiceInfo = {
+    id: string;
+    flow: 'SALE' | 'PURCHASE';
+    letter: InvoiceLetter;
+    pointOfSale: number;
+    number: number;
+    contactName?: string | null;
+};
 
 type Payment = {
     id: string;
-    type: string;
-    method: string;
+    type: PaymentTypeOption;
+    method: PaymentMethodOption;
     amount: number;
-    date: Date;
+    date: string;
     reference: string | null;
     notes: string | null;
-    invoice: any | null;
+    invoiceId: string | null;
+    invoice: PaymentInvoiceInfo | null;
 };
 
-type Invoice = {
+type InvoiceSummary = {
     id: string;
-    flow: string;
-    letter: string;
+    flow: 'SALE' | 'PURCHASE';
+    letter: InvoiceLetter;
     pointOfSale: number;
     number: number;
     totalAmount: number;
-    contact: any;
+    contactName?: string | null;
 };
 
 type TreasuryAccount = {
     id: string;
     name: string;
-    type: string;
+    type: PaymentMethodOption;
     balance: number;
 };
 
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+    CASH: "Efectivo",
+    BANK_TRANSFER: "Transferencia",
+    CHECK: "Cheque",
+    CREDIT_CARD: "Tarjeta Crédito",
+    DEBIT_CARD: "Tarjeta Débito",
+    OTHER: "Otro",
+};
+
+type IncomingPayment = Payment & {
+    invoiceId?: string | null;
+    invoice?: {
+        id: string;
+        flow: 'SALE' | 'PURCHASE';
+        letter: InvoiceLetter;
+        pointOfSale: number | string;
+        number: number | string;
+        contact?: {
+            name: string | null;
+        } | null;
+    } | null;
+};
+
 interface PaymentManagerProps {
-    initialPayments: Payment[];
-    invoices: Invoice[];
+    initialPayments: IncomingPayment[];
+    invoices: InvoiceSummary[];
     treasuryAccounts: TreasuryAccount[];
     organizationId: string;
 }
 
 export default function PaymentManager({ initialPayments, invoices, treasuryAccounts, organizationId }: PaymentManagerProps) {
-    const [payments, setPayments] = useState<Payment[]>(initialPayments);
+    const normalizePayment = (payment: IncomingPayment): Payment => ({
+        id: payment.id,
+        type: payment.type,
+        method: payment.method,
+        amount: Number(payment.amount),
+        date: typeof payment.date === 'string' ? payment.date : new Date(payment.date).toISOString(),
+        reference: payment.reference ?? null,
+        notes: payment.notes ?? null,
+        invoiceId: payment.invoiceId ?? payment.invoice?.id ?? null,
+        invoice: payment.invoice
+            ? {
+                id: payment.invoice.id,
+                flow: payment.invoice.flow,
+                letter: payment.invoice.letter as InvoiceLetter,
+                pointOfSale: Number(payment.invoice.pointOfSale),
+                number: Number(payment.invoice.number),
+                contactName: payment.invoice.contact?.name ?? null,
+            }
+            : null,
+    });
+
+    const [payments, setPayments] = useState<Payment[]>(initialPayments.map(normalizePayment));
     const [isCreating, setIsCreating] = useState(false);
     const [filter, setFilter] = useState<'ALL' | 'PAYMENT' | 'COLLECTION'>('ALL');
+    const [searchTerm, setSearchTerm] = useState("");
+    const [dateFilter, setDateFilter] = useState("");
+    const [methodFilter, setMethodFilter] = useState<PaymentMethodOption | 'all'>('all');
+    const [ownerFilter, setOwnerFilter] = useState<string>('all');
 
     const [formData, setFormData] = useState({
-        type: 'PAYMENT' as 'PAYMENT' | 'COLLECTION',
-        method: 'CASH' as 'CASH' | 'BANK_TRANSFER' | 'CHECK' | 'CREDIT_CARD' | 'DEBIT_CARD' | 'OTHER',
+        type: 'PAYMENT' as PaymentTypeOption,
+        method: 'CASH' as PaymentMethodOption,
         amount: 0,
         date: new Date().toISOString().split('T')[0],
         reference: '',
@@ -89,7 +155,28 @@ export default function PaymentManager({ initialPayments, invoices, treasuryAcco
 
         if (res.success && res.data) {
             toast.success(formData.type === 'PAYMENT' ? 'Pago registrado exitosamente' : 'Cobranza registrada exitosamente');
-            setPayments([res.data, ...payments]);
+            const normalizedPayment = normalizePayment({
+                id: res.data.id,
+                type: res.data.type as PaymentTypeOption,
+                method: res.data.method as PaymentMethodOption,
+                amount: Number(res.data.amount),
+                date: new Date(res.data.date).toISOString(),
+                reference: res.data.reference ?? null,
+                notes: res.data.notes ?? null,
+                invoiceId: (res.data as { invoiceId?: string | null }).invoiceId ?? res.data.invoice?.id ?? null,
+                invoice: res.data.invoice
+                    ? {
+                        id: res.data.invoice.id,
+                        flow: res.data.invoice.flow,
+                        letter: res.data.invoice.letter,
+                        pointOfSale: Number(res.data.invoice.pointOfSale),
+                        number: Number(res.data.invoice.number),
+                        contactName: res.data.invoice.contact?.name ?? null,
+                    }
+                    : null,
+            } as Payment);
+
+            setPayments([normalizedPayment, ...payments]);
             setIsCreating(false);
             setFormData({
                 type: 'PAYMENT',
@@ -106,10 +193,51 @@ export default function PaymentManager({ initialPayments, invoices, treasuryAcco
         }
     };
 
-    const filteredPayments = payments.filter(p => {
-        if (filter === 'ALL') return true;
-        return p.type === filter;
-    });
+    const invoiceMap = useMemo(() => {
+        const map = new Map<string, PaymentInvoiceInfo>();
+        invoices.forEach(inv => {
+            map.set(inv.id, {
+                id: inv.id,
+                flow: inv.flow,
+                letter: inv.letter,
+                pointOfSale: Number(inv.pointOfSale),
+                number: Number(inv.number),
+                contactName: inv.contactName ?? null,
+            });
+        });
+        return map;
+    }, [invoices]);
+
+    const filteredPayments = useMemo(() => {
+        const term = searchTerm.trim().toLowerCase();
+
+        return payments.filter(payment => {
+            if (filter !== 'ALL' && payment.type !== filter) return false;
+            if (methodFilter !== 'all' && payment.method !== methodFilter) return false;
+
+            if (dateFilter) {
+                const paymentDate = new Date(payment.date);
+                if (Number.isNaN(paymentDate.getTime())) return false;
+                if (paymentDate.toISOString().slice(0, 10) !== dateFilter) return false;
+            }
+
+            const relatedInvoice = payment.invoice ?? (payment.invoiceId ? invoiceMap.get(payment.invoiceId) ?? null : null);
+
+            if (term && relatedInvoice) {
+                const formatted = formatInvoiceNumber(relatedInvoice.letter, relatedInvoice.pointOfSale, relatedInvoice.number).toLowerCase();
+                if (!formatted.includes(term)) return false;
+            } else if (term) {
+                return false;
+            }
+
+            if (ownerFilter !== 'all') {
+                const ownerName = relatedInvoice?.contactName?.toLowerCase();
+                if (!ownerName || ownerName !== ownerFilter.toLowerCase()) return false;
+            }
+
+            return true;
+        });
+    }, [payments, filter, methodFilter, dateFilter, searchTerm, ownerFilter, invoiceMap]);
 
     const availableInvoices = invoices.filter(inv => {
         if (formData.type === 'PAYMENT') return inv.flow === 'PURCHASE';
@@ -119,15 +247,83 @@ export default function PaymentManager({ initialPayments, invoices, treasuryAcco
     const totalPayments = payments.filter(p => p.type === 'PAYMENT').reduce((sum, p) => sum + p.amount, 0);
     const totalCollections = payments.filter(p => p.type === 'COLLECTION').reduce((sum, p) => sum + p.amount, 0);
 
+    const ownerOptions = useMemo(() => {
+        const owners = new Set<string>();
+        payments.forEach(payment => {
+            const relatedInvoice = payment.invoice ?? (payment.invoiceId ? invoiceMap.get(payment.invoiceId) ?? null : null);
+            if (relatedInvoice?.contactName) {
+                owners.add(relatedInvoice.contactName);
+            }
+        });
+        return Array.from(owners).sort((a, b) => a.localeCompare(b));
+    }, [payments, invoiceMap]);
+
+    const tableHeaders: SimpleTableHeader[] = useMemo(() => (
+        [
+            { key: 'date', label: 'Fecha' },
+            { key: 'type', label: 'Tipo' },
+            { key: 'method', label: 'Método' },
+            { key: 'reference', label: 'Referencia' },
+            { key: 'invoice', label: 'Factura' },
+            { key: 'owner', label: 'Dueño' },
+            { key: 'amount', label: 'Monto', align: 'right' },
+        ]
+    ), []);
+
+    const tableRows = useMemo(() => (
+        filteredPayments.map(payment => {
+            const relatedInvoice = payment.invoice ?? (payment.invoiceId ? invoiceMap.get(payment.invoiceId) ?? null : null);
+
+            return {
+                id: payment.id,
+                cells: [
+                    new Date(payment.date).toLocaleDateString('es-AR'),
+                    (
+                        <span
+                            key="type"
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${payment.type === 'PAYMENT' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
+                        >
+                            {payment.type === 'PAYMENT' ? 'Pago' : 'Cobranza'}
+                        </span>
+                    ),
+                    PAYMENT_METHOD_LABELS[payment.method] || payment.method,
+                    payment.reference || '-',
+                    relatedInvoice ? (
+                        <Link href={`/dashboard/${relatedInvoice.flow === 'SALE' ? 'sales' : 'purchases'}/${relatedInvoice.id}`}>
+                            <span key="invoice" className="font-mono text-xs text-gray-600">
+                                {formatInvoiceNumber(relatedInvoice.letter, relatedInvoice.pointOfSale, relatedInvoice.number)}
+                            </span>
+                        </Link>
+
+                    ) : '—',
+                    relatedInvoice?.contactName ? (
+                        <span key="owner" className="text-sm text-gray-700">
+                            {relatedInvoice.contactName}
+                        </span>
+                    ) : '—',
+                    (
+                        <span
+                            key="amount"
+                            className={`block font-medium ${payment.type === 'PAYMENT' ? 'text-red-600' : 'text-green-600'}`}
+                        >
+                            {formatCurrency(payment.amount)}
+                        </span>
+                    ),
+                ],
+            };
+        })
+    ), [filteredPayments, invoiceMap]);
+
     return (
         <div className="space-y-6">
             {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
                     <div className="flex items-center justify-between">
                         <div>
                             <p className="text-sm text-gray-500">Total Pagos</p>
-                            <p className="text-2xl font-bold text-red-600">${totalPayments.toFixed(2)}</p>
+                            <p className="text-2xl font-bold text-red-600">{formatCurrency(totalPayments)}</p>
                         </div>
                         <div className="p-3 bg-red-100 rounded-lg">
                             <TrendingDown className="h-6 w-6 text-red-600" />
@@ -139,7 +335,7 @@ export default function PaymentManager({ initialPayments, invoices, treasuryAcco
                     <div className="flex items-center justify-between">
                         <div>
                             <p className="text-sm text-gray-500">Total Cobranzas</p>
-                            <p className="text-2xl font-bold text-green-600">${totalCollections.toFixed(2)}</p>
+                            <p className="text-2xl font-bold text-green-600">{formatCurrency(totalCollections)}</p>
                         </div>
                         <div className="p-3 bg-green-100 rounded-lg">
                             <TrendingUp className="h-6 w-6 text-green-600" />
@@ -152,17 +348,11 @@ export default function PaymentManager({ initialPayments, invoices, treasuryAcco
                         <div>
                             <p className="text-sm text-gray-500">Saldo Neto</p>
                             <p className={`text-2xl font-bold ${(totalCollections - totalPayments) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                ${(totalCollections - totalPayments).toFixed(2)}
+                                {formatCurrency(totalCollections - totalPayments)}
                             </p>
                         </div>
-                        <div className="p-3 bg-gray-100 rounded-lg">
-                            <DollarSign className="h-6 w-6 text-gray-700" />
-                            <div>
-                                <p className="text-sm text-gray-500">Total Cobranzas</p>
-                                <h3 className="text-2xl font-bold text-gray-900">${totalCollections.toFixed(2)}</h3>
-                            </div>
-                        </div>
                     </div>
+                </div>
                 </div>
 
                 {!isCreating ? (
@@ -200,56 +390,54 @@ export default function PaymentManager({ initialPayments, invoices, treasuryAcco
                             </button>
                         </div>
 
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200">
-                                    <tr>
-                                        <th className="px-4 py-3">Fecha</th>
-                                        <th className="px-4 py-3">Tipo</th>
-                                        <th className="px-4 py-3">Método</th>
-                                        <th className="px-4 py-3">Referencia</th>
-                                        <th className="px-4 py-3 text-right">Monto</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-200">
-                                    {filteredPayments.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={5} className="p-8 text-center text-gray-500">
-                                                No se encontraron movimientos.
-                                            </td>
-                                        </tr>
-                                    ) : (
-                                        filteredPayments.map((payment) => (
-                                            <tr key={payment.id} className="hover:bg-gray-50 transition-colors">
-                                                <td className="px-4 py-3">
-                                                    {new Date(payment.date).toLocaleDateString('es-AR')}
-                                                </td>
-                                                <td className="px-4 py-3">
-                                                    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${payment.type === 'PAYMENT' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
-                                                        }`}>
-                                                        {payment.type === 'PAYMENT' ? 'Pago' : 'Cobranza'}
-                                                    </span>
-                                                </td>
-                                                <td className="px-4 py-3 text-gray-600">
-                                                    {payment.method === 'CASH' && 'Efectivo'}
-                                                    {payment.method === 'BANK_TRANSFER' && 'Transferencia'}
-                                                    {payment.method === 'CHECK' && 'Cheque'}
-                                                    {payment.method === 'CREDIT_CARD' && 'Tarjeta Crédito'}
-                                                    {payment.method === 'DEBIT_CARD' && 'Tarjeta Débito'}
-                                                    {payment.method === 'OTHER' && 'Otro'}
-                                                </td>
-                                                <td className="px-4 py-3 text-gray-600">
-                                                    {payment.reference || '-'}
-                                                </td>
-                                                <td className={`px-4 py-3 text-right font-medium ${payment.type === 'PAYMENT' ? 'text-red-600' : 'text-green-600'
-                                                    }`}>
-                                                    ${payment.amount.toFixed(2)}
-                                                </td>
-                                            </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
+                        <div className="w-full">
+                            <TableFilters
+                                searchPlaceholder="Buscar factura"
+                                searchValue={searchTerm}
+                                onSearchChange={setSearchTerm}
+                                dateValue={dateFilter}
+                                onDateChange={setDateFilter}
+                                hasActiveFilters={Boolean(searchTerm || dateFilter || methodFilter !== 'all' || ownerFilter !== 'all')}
+                                onClear={() => {
+                                    setSearchTerm('');
+                                    setDateFilter('');
+                                    setMethodFilter('all');
+                                    setOwnerFilter('all');
+                                }}
+                            >
+                                <select
+                                    value={methodFilter}
+                                    onChange={event => setMethodFilter(event.target.value as PaymentMethodOption | 'all')}
+                                    className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                >
+                                    <option value="all">Método (Todos)</option>
+                                    {Object.keys(PAYMENT_METHOD_LABELS).map(method => (
+                                        <option key={method} value={method}>
+                                            {PAYMENT_METHOD_LABELS[method as PaymentMethodOption]}
+                                        </option>
+                                    ))}
+                                </select>
+                                <select
+                                    value={ownerFilter}
+                                    onChange={event => setOwnerFilter(event.target.value)}
+                                    className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                >
+                                    <option value="all">Dueño (Todos)</option>
+                                    {ownerOptions.map(owner => (
+                                        <option key={owner} value={owner}>
+                                            {owner}
+                                        </option>
+                                    ))}
+                                </select>
+                            </TableFilters>
+                            <SimpleTable
+                                headers={tableHeaders}
+                                rows={tableRows}
+                                hasWrapper={false}
+                                showHeadersWhenEmpty
+                                emptyMessage="No se encontraron movimientos."
+                                tableClassName="text-sm"
+                            />
                         </div>
                     </div>
                 ) : (

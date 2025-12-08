@@ -35,7 +35,8 @@ export default function PurchaseOrderManager({ organizationId, initialOrders, co
   const [isCreating, setIsCreating] = useState(false);
   const [filter, setFilter] = useState<PurchaseOrderStatus | "ALL">("ALL");
   const [isPending, startTransition] = useTransition();
-  const [selectedOrder, setSelectedOrder] = useState<SerializedPurchaseOrder | null>(null);
+  const [orderNumberQuery, setOrderNumberQuery] = useState("");
+  const [contactQuery, setContactQuery] = useState("");
 
   const [formState, setFormState] = useState({
     contactId: contacts[0]?.id ?? "",
@@ -54,9 +55,24 @@ export default function PurchaseOrderManager({ organizationId, initialOrders, co
   });
 
   const filteredOrders = useMemo(() => {
-    if (filter === "ALL") return orders;
-    return orders.filter(order => order.status === filter);
-  }, [orders, filter]);
+    const normalizedOrderTerm = orderNumberQuery.trim().toLowerCase();
+    const normalizedContactTerm = contactQuery.trim().toLowerCase();
+
+    return orders.filter(order => {
+      const matchesStatus = filter === "ALL" || order.status === filter;
+      if (!matchesStatus) return false;
+
+      const matchesOrderNumber = normalizedOrderTerm
+        ? String(order.orderNumber).toLowerCase().includes(normalizedOrderTerm)
+        : true;
+
+      const matchesContact = normalizedContactTerm
+        ? (order.contact?.name || "").toLowerCase().includes(normalizedContactTerm)
+        : true;
+
+      return matchesOrderNumber && matchesContact;
+    });
+  }, [orders, filter, orderNumberQuery, contactQuery]);
 
   const subtotal = formState.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
   const vat = formState.items.reduce((sum, item) => sum + item.quantity * item.unitPrice * (item.vatRate / 100), 0);
@@ -189,13 +205,29 @@ export default function PurchaseOrderManager({ organizationId, initialOrders, co
             </button>
           ))}
         </div>
-        <button
-          onClick={() => setIsCreating(true)}
-          className="flex items-center gap-2 text-sm bg-gray-900 text.white px-3 py-1.5 rounded-md hover:bg-gray-800 transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          Nueva Orden
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="text"
+            placeholder="Buscar por proveedor"
+            value={contactQuery}
+            onChange={event => setContactQuery(event.target.value)}
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
+          />
+          <input
+            type="text"
+            placeholder="Buscar por N° de orden"
+            value={orderNumberQuery}
+            onChange={event => setOrderNumberQuery(event.target.value)}
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 text-gray-900"
+          />
+          <button
+            onClick={() => setIsCreating(true)}
+            className="flex items-center gap-2 text-sm bg-gray-900 text-white px-3 py-1.5 rounded-md hover:bg-gray-800 transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+            Nueva Orden
+          </button>
+        </div>
       </div>
 
       {!isCreating ? (
@@ -215,7 +247,7 @@ export default function PurchaseOrderManager({ organizationId, initialOrders, co
                     </p>
                     <div className="flex flex-wrap gap-2 mt-2">
                       <span className={cn("px-2 py-0.5 text-xs rounded-full border", STATUS_COLORS[order.status])}>
-                        {STATUS_LABELS[order.status]}
+                        {STATUS_LABELS[order.status]} · Saldo ${order.remainingAmount.toLocaleString("es-AR", { minimumFractionDigits: 2 })}
                       </span>
                       <span className="px-2 py-0.5 text-xs rounded-full border bg-gray-50 text-gray-700 border-gray-200">
                         Total ${order.total.toLocaleString("es-AR", { minimumFractionDigits: 2 })}
@@ -239,12 +271,12 @@ export default function PurchaseOrderManager({ organizationId, initialOrders, co
                         Cargar factura
                       </Link>
                     )}
-                    <button
-                      onClick={() => setSelectedOrder(order)}
+                    <Link
+                      href={`/dashboard/purchases/orders/${order.id}`}
                       className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
                     >
                       Ver detalle
-                    </button>
+                    </Link>
                     {order.status === "DRAFT" && (
                       <>
                         <button
@@ -466,85 +498,6 @@ export default function PurchaseOrderManager({ organizationId, initialOrders, co
         </div>
       )}
 
-      {selectedOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
-              <div>
-                <p className="text-sm text-gray-500">Orden #{selectedOrder.orderNumber}</p>
-                <h3 className="text-xl font-semibold text-gray-900">{selectedOrder.contact?.name || "Proveedor"}</h3>
-              </div>
-              <button
-                onClick={() => setSelectedOrder(null)}
-                className="text-sm text-gray-500 hover:text-gray-900"
-              >
-                Cerrar
-              </button>
-            </div>
-
-            <div className="grid gap-4 border-b border-gray-100 px-6 py-4 md:grid-cols-2">
-              <div>
-                <p className="text-xs uppercase text-gray-500">Estado</p>
-                <p className="text-sm font-medium">{STATUS_LABELS[selectedOrder.status]}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase text-gray-500">Total</p>
-                <p className="text-sm font-semibold text-gray-900">${selectedOrder.total.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase text-gray-500">Emitida</p>
-                <p className="text-sm text-gray-900">{new Date(selectedOrder.issueDate).toLocaleDateString("es-AR")}</p>
-              </div>
-              {selectedOrder.expectedDate && (
-                <div>
-                  <p className="text-xs uppercase text-gray-500">Entrega estimada</p>
-                  <p className="text-sm text-gray-900">{new Date(selectedOrder.expectedDate).toLocaleDateString("es-AR")}</p>
-                </div>
-              )}
-              {selectedOrder.invoiceId && (
-                <div className="md:col-span-2">
-                  <p className="text-xs uppercase text-gray-500">Factura vinculada</p>
-                  <Link
-                    href={`/dashboard/purchases#invoice-${selectedOrder.invoiceId}`}
-                    className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-800"
-                    onClick={() => setSelectedOrder(null)}
-                  >
-                    Ver factura
-                  </Link>
-                </div>
-              )}
-              {selectedOrder.notes && (
-                <div className="md:col-span-2">
-                  <p className="text-xs uppercase text-gray-500">Notas</p>
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{selectedOrder.notes}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 py-4">
-              <h4 className="text-sm font-semibold text-gray-900">Ítems</h4>
-              <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-100">
-                {selectedOrder.items.map(item => (
-                  <div key={item.id} className="flex flex-col gap-2 px-4 py-3 text-sm text-gray-700 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="font-medium text-gray-900">{item.description}</p>
-                      <p className="text-xs text-gray-500">{item.productId ? `SKU: ${item.productId}` : "Manual"}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-4 text-xs text-gray-600">
-                      <span>Cant. {item.quantity}</span>
-                      <span>Precio ${item.unitPrice.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</span>
-                      <span>IVA {item.vatRate}%</span>
-                      <span className="font-semibold text-gray-900">
-                        Total ${item.total.toLocaleString("es-AR", { minimumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

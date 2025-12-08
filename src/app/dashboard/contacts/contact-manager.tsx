@@ -32,6 +32,9 @@ export default function ContactManager({ initialContacts, organizationId, defaul
         type: (enforcedType ?? "CUSTOMER") as ContactType,
     });
 
+    const URL = defaultType === "CUSTOMER" ? "/dashboard/clients" : defaultType === "VENDOR" ? "/dashboard/vendors" : "/dashboard/contacts";
+
+
     useEffect(() => {
         if (enforcedType) {
             setNewContact(prev => ({ ...prev, type: enforcedType }));
@@ -130,7 +133,7 @@ export default function ContactManager({ initialContacts, organizationId, defaul
                                 className="flex items-center justify-center gap-2 text-sm bg-gray-900 text-white px-3 py-1.5 rounded-md hover:bg-gray-800 transition-colors"
                             >
                                 <Plus className="h-4 w-4" />
-                                Nuevo Contacto
+                                {defaultType === "CUSTOMER" ? "Nuevo Cliente" : defaultType === "VENDOR" ? "Nuevo Proveedor" : "Nuevo Contacto"}
                             </button>
                         </div>
                     </div>
@@ -149,7 +152,7 @@ export default function ContactManager({ initialContacts, organizationId, defaul
                                         </div>
                                         <div>
                                             <div className="flex items-center gap-2">
-                                                <Link href={`/dashboard/contacts/${contact.id}`} className="hover:underline">
+                                                <Link href={`${URL}/${contact.id}`} className="hover:underline">
                                                     <h4 className="font-medium text-gray-900">{contact.name}</h4>
                                                 </Link>
                                                 <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full border", contact.type === 'CUSTOMER' ? "bg-blue-50 border-blue-100 text-blue-600" : "bg-orange-50 border-orange-100 text-orange-600")}>

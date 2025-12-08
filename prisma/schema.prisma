@@ -203,6 +203,9 @@ model InvoiceItem {
   productId String?
   product   Product? @relation(fields: [productId], references: [id])
 
+  purchaseOrderItemId String?
+  purchaseOrderItem   PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id])
+
   description String
   quantity    Decimal
   unitPrice   Decimal
@@ -301,6 +304,8 @@ model PurchaseOrderItem {
   unitPrice   Decimal
   vatRate     Decimal
   total       Decimal
+
+  invoiceItems InvoiceItem[]
 }
 
 model TreasuryAccount {

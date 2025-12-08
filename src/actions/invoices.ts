@@ -60,6 +60,9 @@ export type SerializedInvoiceDetail = {
     items: SerializedInvoiceItem[];
     payments: SerializedPayment[];
     attachments: SerializedAttachment[];
+    paidAmount: number;
+    balance: number;
+    paymentStatus: 'PENDING' | 'PARTIAL' | 'PAID';
     purchaseOrderId: string | null;
     purchaseOrderNumber: number | null;
     purchaseOrderRemaining: number | null;
@@ -81,28 +84,40 @@ export async function getInvoices(organizationId: string, flow?: InvoiceFlow) {
                 contact: true,
                 items: true,
                 attachments: true,
+                payments: true,
             },
             orderBy: { date: 'desc' },
         });
 
         // Convert Decimal to number for client components
-        const serializedInvoices = invoices.map(inv => ({
-            ...inv,
-            netAmount: Number(inv.netAmount),
-            vatAmount: Number(inv.vatAmount),
-            totalAmount: Number(inv.totalAmount),
-            items: inv.items.map(item => ({
-                ...item,
-                quantity: Number(item.quantity),
-                unitPrice: Number(item.unitPrice),
-                vatRate: Number(item.vatRate),
-                total: Number(item.total),
-            })),
-            attachments: inv.attachments.map(file => ({
-                ...file,
-                createdAt: file.createdAt.toISOString(),
-            })),
-        }));
+        const serializedInvoices = invoices.map(inv => {
+            const totalAmount = Number(inv.totalAmount);
+            const paidAmount = inv.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+            const balance = totalAmount - paidAmount;
+            const isPaid = Math.abs(balance) < 0.01;
+            const isPartial = !isPaid && paidAmount > 0.01;
+
+            return {
+                ...inv,
+                netAmount: Number(inv.netAmount),
+                vatAmount: Number(inv.vatAmount),
+                totalAmount,
+                paidAmount,
+                balance,
+                paymentStatus: isPaid ? 'PAID' : isPartial ? 'PARTIAL' : 'PENDING',
+                items: inv.items.map(item => ({
+                    ...item,
+                    quantity: Number(item.quantity),
+                    unitPrice: Number(item.unitPrice),
+                    vatRate: Number(item.vatRate),
+                    total: Number(item.total),
+                })),
+                attachments: inv.attachments.map(file => ({
+                    ...file,
+                    createdAt: file.createdAt.toISOString(),
+                })),
+            };
+        });
 
         return { success: true, data: serializedInvoices };
     } catch (error) {
@@ -136,6 +151,12 @@ export async function getInvoiceDetail(organizationId: string, invoiceId: string
             return { success: false, error: "Factura no encontrada" };
         }
 
+        const totalAmount = Number(invoice.totalAmount);
+        const paidAmount = invoice.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+        const balance = totalAmount - paidAmount;
+        const isPaid = Math.abs(balance) < 0.01;
+        const isPartial = !isPaid && paidAmount > 0.01;
+
         const serialized: SerializedInvoiceDetail = {
             id: invoice.id,
             flow: invoice.flow,
@@ -155,7 +176,7 @@ export async function getInvoiceDetail(organizationId: string, invoiceId: string
                 : null,
             netAmount: Number(invoice.netAmount),
             vatAmount: Number(invoice.vatAmount),
-            totalAmount: Number(invoice.totalAmount),
+            totalAmount,
             items: invoice.items.map(item => ({
                 id: item.id,
                 productId: item.productId,
@@ -189,6 +210,9 @@ export async function getInvoiceDetail(organizationId: string, invoiceId: string
                 url: file.url,
                 createdAt: file.createdAt.toISOString(),
             })),
+            paidAmount,
+            balance,
+            paymentStatus: isPaid ? 'PAID' : isPartial ? 'PARTIAL' : 'PENDING',
             purchaseOrderId: invoice.purchaseOrderId,
             purchaseOrderNumber: invoice.purchaseOrder?.orderNumber ?? null,
             purchaseOrderRemaining:
@@ -256,6 +280,7 @@ export async function createInvoice(data: {
         unitPrice: number;
         vatRate: number;
         total: number;
+        purchaseOrderItemId?: string;
     }[];
     purchaseOrderId?: string;
 }) {
@@ -269,9 +294,17 @@ export async function createInvoice(data: {
             quantity: number;
             unitPrice: number;
             vatRate: number;
+            purchaseOrderItemId?: string;
         };
 
-        let sourceItems: InvoiceItemInput[] = data.items;
+        let sourceItems: InvoiceItemInput[] = data.items.map(item => ({
+            productId: item.productId,
+            description: item.description,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            vatRate: item.vatRate,
+            purchaseOrderItemId: item.purchaseOrderItemId,
+        }));
         let effectiveContactId = data.contactId;
         let linkedPurchaseOrderId: string | null = null;
         let purchaseOrderSnapshot: {
@@ -284,7 +317,11 @@ export async function createInvoice(data: {
             const purchaseOrder = await db.purchaseOrder.findUnique({
                 where: { id: data.purchaseOrderId },
                 include: {
-                    items: true,
+                    items: {
+                        include: {
+                            invoiceItems: true,
+                        },
+                    },
                     contact: true,
                 },
             });
@@ -312,13 +349,49 @@ export async function createInvoice(data: {
 
             linkedPurchaseOrderId = purchaseOrder.id;
             effectiveContactId = purchaseOrder.contactId;
-            sourceItems = purchaseOrder.items.map(item => ({
-                productId: item.productId ?? undefined,
-                description: item.description,
-                quantity: Number(item.quantity),
-                unitPrice: Number(item.unitPrice),
-                vatRate: Number(item.vatRate),
-            }));
+
+            const poItemsById = new Map(purchaseOrder.items.map(item => [item.id, item]));
+            const usedQuantities: Record<string, number> = {};
+
+            for (const item of sourceItems) {
+                if (!item.purchaseOrderItemId) {
+                    return {
+                        success: false,
+                        error: "No podés agregar ítems nuevos cuando facturás una orden de compra.",
+                    };
+                }
+
+                const poItem = poItemsById.get(item.purchaseOrderItemId);
+                if (!poItem) {
+                    return {
+                        success: false,
+                        error: "Uno de los ítems no pertenece a la orden de compra seleccionada.",
+                    };
+                }
+
+                if (item.quantity <= 0) {
+                    return {
+                        success: false,
+                        error: `La cantidad del ítem "${poItem.description}" debe ser mayor a cero.`,
+                    };
+                }
+
+                const alreadyInvoicedQuantity = (poItem.invoiceItems ?? []).reduce(
+                    (sum: number, invoiceItem: any) => sum + Number(invoiceItem.quantity),
+                    0,
+                );
+                const availableQuantity = Math.max(0, Number(poItem.quantity) - alreadyInvoicedQuantity);
+
+                const nextUsage = (usedQuantities[item.purchaseOrderItemId] || 0) + item.quantity;
+                if (nextUsage - availableQuantity > 1e-6) {
+                    return {
+                        success: false,
+                        error: `La cantidad del ítem "${poItem.description}" supera la disponible en la orden (${availableQuantity}).`,
+                    };
+                }
+
+                usedQuantities[item.purchaseOrderItemId] = nextUsage;
+            }
         }
 
         if (!sourceItems.length) {
@@ -448,6 +521,13 @@ export async function createInvoice(data: {
         }
 
         const totalAmount = netAmount + vatAmount;
+
+        if (purchaseOrderSnapshot && totalAmount - purchaseOrderSnapshot.remainingAmount > 0.01) {
+            return {
+                success: false,
+                error: "El total de la factura supera el saldo pendiente de la orden de compra.",
+            };
+        }
 
         // Get contact info for snapshot
         let contactSnapshot: {

@@ -49,7 +49,7 @@ export default function ContactDetailView({ data }: { data: any }) {
             {/* Header */}
             <div className="flex items-center gap-4">
                 <Link
-                    href="/dashboard/contacts"
+                    href="/dashboard/vendors"
                     className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                 >
                     <ArrowLeft className="h-5 w-5 text-gray-600" />

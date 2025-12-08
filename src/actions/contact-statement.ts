@@ -65,6 +65,9 @@ export async function getContactStatement(contactId: string) {
             // Calculate how much has been paid for this invoice
             const invoicePayments = payments.filter(p => p.invoiceId === inv.id);
             const paidAmount = invoicePayments.reduce((sum, p) => sum + Number(p.amount), 0);
+            const remaining = invoiceTotal - paidAmount;
+            const isPaid = Math.abs(remaining) < 0.01;
+            const isPartial = !isPaid && paidAmount > 0.01;
 
             return {
                 id: inv.id,
@@ -77,8 +80,9 @@ export async function getContactStatement(contactId: string) {
                 vatAmount: Number(inv.vatAmount),
                 totalAmount: invoiceTotal,
                 paidAmount: paidAmount,
-                balance: invoiceTotal - paidAmount,
-                isPaid: Math.abs(invoiceTotal - paidAmount) < 0.01,
+                balance: remaining,
+                isPaid,
+                paymentStatus: isPaid ? 'PAID' : isPartial ? 'PARTIAL' : 'PENDING',
             };
         });
 
