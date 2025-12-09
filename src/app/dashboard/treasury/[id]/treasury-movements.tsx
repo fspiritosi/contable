@@ -1,9 +1,12 @@
 'use client';
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { formatCurrency, formatInvoiceNumber } from "@/lib/utils";
 import { InvoiceLetter } from "@prisma/client";
+import { createTreasuryMovement } from "@/actions/treasury";
+import { toast } from "sonner";
 
 const METHOD_LABELS: Record<string, string> = {
   CASH: "Efectivo",
@@ -47,6 +50,13 @@ interface TreasuryMovementsSectionProps {
   accountInfo: TreasuryAccountInfo;
   hasMovements: boolean;
   accountType: string;
+  chartOfAccounts: {
+    id: string;
+    code: string;
+    name: string;
+    type: string;
+  }[];
+  treasuryAccountId: string;
 }
 
 export default function TreasuryMovementsSection({
@@ -54,8 +64,19 @@ export default function TreasuryMovementsSection({
   accountInfo,
   hasMovements,
   accountType,
+  chartOfAccounts,
+  treasuryAccountId,
 }: TreasuryMovementsSectionProps) {
   const [selectedMovementId, setSelectedMovementId] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [movementForm, setMovementForm] = useState({
+    date: new Date().toISOString().split("T")[0],
+    description: "",
+    amount: "",
+    accountId: "",
+  });
+  const [isPending, startTransition] = useTransition();
+  const router = useRouter();
 
   const selectedMovement = useMemo(
     () => movements.find(movement => movement.id === selectedMovementId) ?? null,
@@ -124,10 +145,125 @@ export default function TreasuryMovementsSection({
     ];
   }, [selectedMovement]);
 
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!movementForm.accountId) {
+      toast.error("Selecciona la cuenta contable");
+      return;
+    }
+    const numericAmount = Number(movementForm.amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      toast.error("El monto debe ser mayor a 0");
+      return;
+    }
+
+    startTransition(async () => {
+      const res = await createTreasuryMovement({
+        treasuryAccountId,
+        accountId: movementForm.accountId,
+        date: movementForm.date,
+        description: movementForm.description || undefined,
+        amount: numericAmount,
+      });
+
+      if (res.success) {
+        toast.success("Movimiento registrado");
+        setMovementForm({
+          date: new Date().toISOString().split("T")[0],
+          description: "",
+          amount: "",
+          accountId: "",
+        });
+        setIsCreating(false);
+        router.refresh();
+      } else {
+        toast.error(res.error || "No se pudo registrar el movimiento");
+      }
+    });
+  };
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
       <div className="col-span-2 bg-white border border-gray-200 rounded-xl p-4">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Movimientos</h2>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Movimientos</h2>
+          <button
+            type="button"
+            onClick={() => setIsCreating(prev => !prev)}
+            className="text-sm font-medium text-white bg-gray-900 px-3 py-1.5 rounded-md hover:bg-gray-800 transition-colors"
+          >
+            {isCreating ? "Cerrar" : "Nuevo Movimiento"}
+          </button>
+        </div>
+
+        {isCreating && (
+          <div className="border border-gray-200 rounded-lg p-4 mb-6 bg-gray-50">
+            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Fecha</label>
+                <input
+                  type="date"
+                  required
+                  value={movementForm.date}
+                  onChange={event => setMovementForm({ ...movementForm, date: event.target.value })}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Cuenta contable</label>
+                <select
+                  required
+                  value={movementForm.accountId}
+                  onChange={event => setMovementForm({ ...movementForm, accountId: event.target.value })}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                >
+                  <option value="">Seleccionar cuenta...</option>
+                  {chartOfAccounts.map(account => (
+                    <option key={account.id} value={account.id}>
+                      {account.code} - {account.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Monto</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={movementForm.amount}
+                  onChange={event => setMovementForm({ ...movementForm, amount: event.target.value })}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  placeholder="0.00"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Descripción</label>
+                <input
+                  type="text"
+                  value={movementForm.description}
+                  onChange={event => setMovementForm({ ...movementForm, description: event.target.value })}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  placeholder="Detalle del movimiento"
+                />
+              </div>
+              <div className="md:col-span-4 flex justify-end">
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-500 disabled:opacity-60"
+                >
+                  {isPending ? "Registrando..." : "Registrar Movimiento"}
+                </button>
+              </div>
+            </form>
+            <p className="text-xs text-gray-500 mt-2">
+              Las cuentas de tipo Pasivo, Patrimonio o Ingreso incrementan la tesorería. Las de Activo o Gasto la disminuyen.
+            </p>
+          </div>
+        )}
+
         {!hasMovements ? (
           <p className="text-sm text-gray-500">Aún no hay movimientos registrados.</p>
         ) : (

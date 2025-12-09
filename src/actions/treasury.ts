@@ -3,7 +3,7 @@
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { auth } from "@clerk/nextjs/server";
-import { PaymentMethod } from "@prisma/client";
+import { AccountType, PaymentMethod, PaymentType } from "@prisma/client";
 import { getActiveOrganizationId } from "@/lib/organization";
 
 export async function getTreasuryAccounts(organizationId: string) {
@@ -28,6 +28,105 @@ export async function getTreasuryAccounts(organizationId: string) {
     } catch (error) {
         console.error("Failed to fetch treasury accounts:", error);
         return { success: false, error: "Failed to fetch treasury accounts" };
+    }
+}
+
+export async function createTreasuryMovement(data: {
+    treasuryAccountId: string;
+    accountId: string;
+    date: string;
+    description?: string;
+    amount: number;
+}) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    try {
+        const organizationId = await getActiveOrganizationId();
+        const parsedAmount = Number(data.amount);
+        if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+            return { success: false, error: "El monto debe ser mayor a 0" };
+        }
+
+        const parsedDate = data.date ? new Date(data.date) : new Date();
+
+        const [treasuryAccount, selectedAccount] = await Promise.all([
+            db.treasuryAccount.findUnique({
+                where: { id: data.treasuryAccountId },
+                include: { account: true },
+            }),
+            db.account.findUnique({ where: { id: data.accountId } }),
+        ]);
+
+        if (!treasuryAccount || treasuryAccount.organizationId !== organizationId) {
+            return { success: false, error: "Cuenta de tesorería inválida" };
+        }
+
+        if (!selectedAccount || selectedAccount.organizationId !== organizationId) {
+            return { success: false, error: "Cuenta contable inválida" };
+        }
+
+        const increasesTreasury = selectedAccount.type === AccountType.LIABILITY
+            || selectedAccount.type === AccountType.EQUITY
+            || selectedAccount.type === AccountType.INCOME;
+
+        const movementType: PaymentType = increasesTreasury ? 'COLLECTION' : 'PAYMENT';
+        const balanceChange = increasesTreasury ? parsedAmount : -parsedAmount;
+
+        const journalEntry = await db.journalEntry.create({
+            data: {
+                organizationId,
+                date: parsedDate,
+                description: data.description || 'Movimiento manual de tesorería',
+                lines: {
+                    create: [
+                        {
+                            accountId: selectedAccount.id,
+                            debit: increasesTreasury ? 0 : parsedAmount,
+                            credit: increasesTreasury ? parsedAmount : 0,
+                            description: data.description,
+                        },
+                        {
+                            accountId: treasuryAccount.accountId,
+                            debit: increasesTreasury ? parsedAmount : 0,
+                            credit: increasesTreasury ? 0 : parsedAmount,
+                            description: data.description,
+                        },
+                    ],
+                },
+            },
+        });
+
+        await db.treasuryAccount.update({
+            where: { id: treasuryAccount.id },
+            data: {
+                balance: {
+                    increment: balanceChange,
+                },
+            },
+        });
+
+        await db.payment.create({
+            data: {
+                organizationId,
+                type: movementType,
+                method: treasuryAccount.type,
+                amount: parsedAmount,
+                date: parsedDate,
+                reference: data.description,
+                notes: data.description,
+                treasuryAccountId: treasuryAccount.id,
+                journalEntryId: journalEntry.id,
+            },
+        });
+
+        revalidatePath(`/dashboard/treasury/${treasuryAccount.id}`);
+        revalidatePath("/dashboard/payments");
+
+        return { success: true };
+    } catch (error) {
+        console.error("Failed to create treasury movement:", error);
+        return { success: false, error: "No se pudo registrar el movimiento" };
     }
 }
 

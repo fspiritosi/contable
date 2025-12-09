@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getActiveOrganizationId } from "@/lib/organization";
 import { getTreasuryAccountDetail } from "@/actions/treasury";
 import { getTreasuryAccountMovements } from "@/actions/payments";
+import { getAccounts } from "@/actions/accounts";
 import { formatCurrency } from "@/lib/utils";
 import TreasuryMovementsSection from "./treasury-movements";
 
@@ -13,9 +14,10 @@ export default async function TreasuryAccountDetailPage({
 }) {
   const { id } = await params;
   const currentOrgId = await getActiveOrganizationId();
-  const [accountRes, movementsRes] = await Promise.all([
+  const [accountRes, movementsRes, accountsRes] = await Promise.all([
     getTreasuryAccountDetail(id, currentOrgId),
     getTreasuryAccountMovements(id),
+    getAccounts(),
   ]);
 
   if (!accountRes.success || !accountRes.data) {
@@ -24,6 +26,12 @@ export default async function TreasuryAccountDetailPage({
 
   const account = accountRes.data;
   const movements = movementsRes.success && movementsRes.data ? movementsRes.data : [];
+  const chartOfAccounts = (accountsRes.success && accountsRes.data ? accountsRes.data : []).map((acc: any) => ({
+    id: acc.id,
+    code: acc.code,
+    name: acc.name,
+    type: acc.type,
+  }));
 
   /**
    * Normalize server data to be client-safe. Ensures dates and decimals are serializable.
@@ -98,6 +106,8 @@ export default async function TreasuryAccountDetailPage({
         accountInfo={accountInfo}
         hasMovements={movementsWithBalance.length > 0}
         accountType={account.type}
+        chartOfAccounts={chartOfAccounts}
+        treasuryAccountId={account.id}
       />
     </div>
   );

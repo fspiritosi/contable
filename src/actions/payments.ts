@@ -325,16 +325,33 @@ export async function getTreasuryAccountMovements(treasuryAccountId: string) {
         });
 
         // Serialize Decimal fields
-        const serializedMovements = movements.map(movement => ({
-            ...movement,
-            amount: Number(movement.amount),
-            invoice: movement.invoice ? {
-                ...movement.invoice,
-                netAmount: Number(movement.invoice.netAmount),
-                vatAmount: Number(movement.invoice.vatAmount),
-                totalAmount: Number(movement.invoice.totalAmount),
-            } : null,
-        }));
+        const serializedMovements = movements.map(movement => {
+            const contact = movement.invoice?.contact;
+
+            return {
+                ...movement,
+                amount: Number(movement.amount),
+                date: movement.date instanceof Date ? movement.date.toISOString() : movement.date,
+                createdAt: movement.createdAt instanceof Date ? movement.createdAt.toISOString() : movement.createdAt,
+                updatedAt: movement.updatedAt instanceof Date ? movement.updatedAt.toISOString() : movement.updatedAt,
+                invoice: movement.invoice ? {
+                    ...movement.invoice,
+                    netAmount: Number(movement.invoice.netAmount),
+                    vatAmount: Number(movement.invoice.vatAmount),
+                    totalAmount: Number(movement.invoice.totalAmount),
+                    pointOfSale: Number(movement.invoice.pointOfSale),
+                    number: Number(movement.invoice.number),
+                    contactName: contact?.name ?? null,
+                    contact: contact
+                        ? {
+                            ...contact,
+                            createdAt: contact.createdAt instanceof Date ? contact.createdAt.toISOString() : contact.createdAt,
+                            updatedAt: contact.updatedAt instanceof Date ? contact.updatedAt.toISOString() : contact.updatedAt,
+                        }
+                        : null,
+                } : null,
+            };
+        });
 
         return { success: true, data: serializedMovements };
     } catch (error: any) {
