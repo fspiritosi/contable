@@ -6,6 +6,7 @@ import { getTreasuryAccountMovements } from "@/actions/payments";
 import { getAccounts } from "@/actions/accounts";
 import { getContacts } from "@/actions/contacts";
 import { getInvoices } from "@/actions/invoices";
+import { getRetentionSettings } from "@/actions/retentions";
 import { formatCurrency } from "@/lib/utils";
 import TreasuryMovementsSection from "./treasury-movements";
 
@@ -16,12 +17,13 @@ export default async function TreasuryAccountDetailPage({
 }) {
   const { id } = await params;
   const currentOrgId = await getActiveOrganizationId();
-  const [accountRes, movementsRes, accountsRes, contactsRes, invoicesRes] = await Promise.all([
+  const [accountRes, movementsRes, accountsRes, contactsRes, invoicesRes, retentionSettingsRes] = await Promise.all([
     getTreasuryAccountDetail(id, currentOrgId),
     getTreasuryAccountMovements(id),
     getAccounts(),
     getContacts(currentOrgId),
     getInvoices(currentOrgId),
+    getRetentionSettings(currentOrgId),
   ]);
 
   if (!accountRes.success || !accountRes.data) {
@@ -123,6 +125,8 @@ export default async function TreasuryAccountDetailPage({
     contactName: invoice.contact?.name ?? null,
   }));
 
+  const retentionSettings = (retentionSettingsRes.success && retentionSettingsRes.data ? retentionSettingsRes.data : []);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -161,6 +165,7 @@ export default async function TreasuryAccountDetailPage({
         contacts={contacts}
         invoices={reconcilableInvoices}
         organizationId={currentOrgId}
+        retentionSettings={retentionSettings}
       />
     </div>
   );

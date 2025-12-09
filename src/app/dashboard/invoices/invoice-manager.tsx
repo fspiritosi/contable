@@ -55,7 +55,7 @@ type SerializedAttachment = {
 
 type InvoicePaymentStatus = 'PENDING' | 'PARTIAL' | 'PAID';
 
-type SerializedInvoice = Omit<Invoice, 'netAmount' | 'vatAmount' | 'totalAmount'> & {
+type SerializedInvoice = Omit<Invoice, 'netAmount' | 'vatAmount' | 'totalAmount' | 'amountAllocated' | 'amountRemaining'> & {
     netAmount: number;
     vatAmount: number;
     totalAmount: number;
@@ -65,6 +65,8 @@ type SerializedInvoice = Omit<Invoice, 'netAmount' | 'vatAmount' | 'totalAmount'
     paidAmount: number;
     balance: number;
     paymentStatus: InvoicePaymentStatus;
+    amountAllocated: number;
+    amountRemaining: number;
 };
 
 type InvoiceFormItem = {

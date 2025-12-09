@@ -1,13 +1,14 @@
 'use client';
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatCurrency, formatInvoiceNumber } from "@/lib/utils";
-import { ContactType, InvoiceLetter, InvoiceFlow, RetentionTaxType } from "@prisma/client";
+import { ContactType, InvoiceLetter, InvoiceFlow } from "@prisma/client";
 import { createTreasuryMovement } from "@/actions/treasury";
 import { allocatePayment } from "@/actions/payments";
 import { recordRetention } from "@/actions/retentions";
+import type { SerializedRetentionSetting } from "@/actions/retentions";
 import { toast } from "sonner";
 
 const METHOD_LABELS: Record<string, string> = {
@@ -24,12 +25,6 @@ const AMOUNT_TOLERANCE = 0.01;
 const expectedFlowByMovement: Record<"PAYMENT" | "COLLECTION", InvoiceFlow> = {
   PAYMENT: "PURCHASE",
   COLLECTION: "SALE",
-};
-
-const RETENTION_TAX_LABELS: Record<RetentionTaxType, string> = {
-  VAT: "IVA",
-  INCOME_TAX: "Ganancias",
-  GROSS_INCOME: "Ingresos Brutos",
 };
 
 const toNumber = (value: number | string | null | undefined) => {
@@ -125,6 +120,7 @@ interface TreasuryMovementsSectionProps {
   }[];
   invoices: ReconciliationInvoice[];
   organizationId: string;
+  retentionSettings?: SerializedRetentionSetting[];
 }
 
 export default function TreasuryMovementsSection({
@@ -137,7 +133,9 @@ export default function TreasuryMovementsSection({
   contacts,
   invoices,
   organizationId,
+  retentionSettings = [],
 }: TreasuryMovementsSectionProps) {
+  const retentionSettingsList = retentionSettings;
   const [selectedMovementId, setSelectedMovementId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [movementForm, setMovementForm] = useState({
@@ -155,15 +153,40 @@ export default function TreasuryMovementsSection({
   const [retentionInvoiceId, setRetentionInvoiceId] = useState<string>("");
   const [isSavingRetention, setIsSavingRetention] = useState(false);
   const [retentionForm, setRetentionForm] = useState({
-    taxType: RetentionTaxType.VAT as RetentionTaxType,
+    retentionSettingId: retentionSettingsList[0]?.id ?? "",
     baseAmount: 0,
-    rate: 1,
+    rate: retentionSettingsList[0]?.defaultRate ?? 0,
     amount: 0,
     certificateNumber: "",
     certificateDate: new Date().toISOString().split("T")[0],
     notes: "",
   });
   const router = useRouter();
+  const selectedRetentionSetting = useMemo(
+    () => retentionSettingsList.find(setting => setting.id === retentionForm.retentionSettingId) ?? null,
+    [retentionSettingsList, retentionForm.retentionSettingId],
+  );
+
+  useEffect(() => {
+    if (!retentionSettingsList.length) {
+      return;
+    }
+
+    setRetentionForm(prev => {
+      const nextSettingId = retentionSettingsList[0]?.id ?? "";
+      if (prev.retentionSettingId && retentionSettingsList.some(setting => setting.id === prev.retentionSettingId)) {
+        return prev;
+      }
+
+      const fallbackRate = retentionSettingsList[0]?.defaultRate ?? 0;
+      return {
+        ...prev,
+        retentionSettingId: nextSettingId,
+        rate: fallbackRate ?? 0,
+        amount: Number(((prev.baseAmount * (fallbackRate ?? 0)) / 100).toFixed(2)),
+      };
+    });
+  }, [retentionSettingsList]);
 
   const selectedMovement = useMemo(
     () => movements.find(movement => movement.id === selectedMovementId) ?? null,
@@ -407,10 +430,19 @@ export default function TreasuryMovementsSection({
       toast.error("No hay facturas con saldo disponible para registrar retenciones.");
       return;
     }
+    if (!retentionSettingsList.length) {
+      toast.error("Configura tipos de retenciones antes de registrarlas.");
+      return;
+    }
     const defaultInvoice = retentionEligibleInvoices[0];
     setRetentionInvoiceId(defaultInvoice.id);
     setRetentionForm(prev => ({
       ...prev,
+      retentionSettingId: prev.retentionSettingId || retentionSettingsList[0]?.id || "",
+      rate:
+        prev.retentionSettingId
+          ? retentionSettingsList.find(setting => setting.id === prev.retentionSettingId)?.defaultRate ?? prev.rate
+          : retentionSettingsList[0]?.defaultRate ?? prev.rate,
       baseAmount: defaultInvoice.totalAmount,
       amount: defaultInvoice.amountRemaining,
     }));
@@ -440,6 +472,10 @@ export default function TreasuryMovementsSection({
       toast.error("Seleccioná una factura");
       return;
     }
+    if (!retentionForm.retentionSettingId) {
+      toast.error("Seleccioná un tipo de retención");
+      return;
+    }
     if (retentionForm.amount <= 0) {
       toast.error("El monto de la retención debe ser mayor a 0");
       return;
@@ -453,7 +489,7 @@ export default function TreasuryMovementsSection({
     const res = await recordRetention({
       organizationId,
       invoiceId: selectedRetentionInvoice.id,
-      taxType: retentionForm.taxType,
+      retentionSettingId: retentionForm.retentionSettingId,
       baseAmount: retentionForm.baseAmount,
       rate: retentionForm.rate,
       amount: retentionForm.amount,
@@ -893,18 +929,33 @@ export default function TreasuryMovementsSection({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Impuesto</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de retención</label>
                   <select
-                    value={retentionForm.taxType}
-                    onChange={event => setRetentionForm(prev => ({ ...prev, taxType: event.target.value as RetentionTaxType }))}
+                    value={retentionForm.retentionSettingId}
+                    onChange={event => {
+                      const settingId = event.target.value;
+                      const nextSetting = retentionSettingsList.find(setting => setting.id === settingId);
+                      setRetentionForm(prev => ({
+                        ...prev,
+                        retentionSettingId: settingId,
+                        rate: nextSetting?.defaultRate ?? prev.rate,
+                        amount: Number(((prev.baseAmount * (nextSetting?.defaultRate ?? prev.rate ?? 0)) / 100).toFixed(2)),
+                      }));
+                    }}
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
                   >
-                    {Object.entries(RETENTION_TAX_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
+                    <option value="" disabled>
+                      Seleccioná una opción
+                    </option>
+                    {retentionSettingsList.map(setting => (
+                      <option key={setting.id} value={setting.id}>
+                        {setting.name}
                       </option>
                     ))}
                   </select>
+                  {!retentionSettingsList.length && (
+                    <p className="text-xs text-red-600 mt-1">No hay retenciones configuradas.</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Fecha del certificado</label>

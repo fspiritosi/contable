@@ -149,7 +149,8 @@ const serializePayment = (
                   retention: allocation.retention
                       ? {
                             id: allocation.retention.id,
-                            taxType: allocation.retention.taxType,
+                            typeName: allocation.retention.typeName,
+                            typeCode: allocation.retention.typeCode ?? null,
                             amount: Number(allocation.retention.amount),
                         }
                       : null,
