@@ -2,6 +2,21 @@
 
 import { db } from "@/lib/db";
 import { auth } from "@clerk/nextjs/server";
+import { Prisma } from "@prisma/client";
+
+const AMOUNT_TOLERANCE = 0.01;
+
+const toNumber = (value: Prisma.Decimal | number | null | undefined) =>
+    value === null || value === undefined ? 0 : Number(value);
+
+const toISOString = (value: Date | string | null | undefined) =>
+    value instanceof Date ? value.toISOString() : value ?? null;
+
+const ensureTimestamp = (value: string | null | undefined) => {
+    if (!value) return 0;
+    const time = new Date(value).getTime();
+    return Number.isNaN(time) ? 0 : time;
+};
 
 export async function getContactStatement(contactId: string) {
     const { userId } = await auth();
@@ -20,13 +35,8 @@ export async function getContactStatement(contactId: string) {
             return { success: false, error: "Contact not found" };
         }
 
-        // Get all invoices for this contact
         const invoices = await db.invoice.findMany({
             where: { contactId },
-            include: {
-                items: true,
-                payments: true,
-            },
             orderBy: { date: 'desc' },
         });
 
@@ -41,68 +51,140 @@ export async function getContactStatement(contactId: string) {
               })
             : [];
 
-        // Get all payments for this contact's invoices
         const payments = await db.payment.findMany({
             where: {
-                invoiceId: {
-                    in: invoices.map(inv => inv.id),
-                },
+                organizationId: contact.organizationId,
+                OR: [
+                    { contactId },
+                    { invoice: { contactId } },
+                    { allocations: { some: { invoice: { contactId } } } },
+                ],
             },
             include: {
-                invoice: true,
+                invoice: {
+                    select: {
+                        id: true,
+                        letter: true,
+                        pointOfSale: true,
+                        number: true,
+                        contactId: true,
+                    },
+                },
+                allocations: {
+                    include: {
+                        invoice: {
+                            select: {
+                                id: true,
+                                letter: true,
+                                pointOfSale: true,
+                                number: true,
+                                contactId: true,
+                            },
+                        },
+                    },
+                },
             },
             orderBy: { date: 'desc' },
         });
 
-        // Calculate totals and balances
-        let totalInvoiced = 0;
-        let totalPaid = 0;
-
         const serializedInvoices = invoices.map(inv => {
-            const invoiceTotal = Number(inv.totalAmount);
-            totalInvoiced += invoiceTotal;
-
-            // Calculate how much has been paid for this invoice
-            const invoicePayments = payments.filter(p => p.invoiceId === inv.id);
-            const paidAmount = invoicePayments.reduce((sum, p) => sum + Number(p.amount), 0);
-            const remaining = invoiceTotal - paidAmount;
-            const isPaid = Math.abs(remaining) < 0.01;
-            const isPartial = !isPaid && paidAmount > 0.01;
+            const totalAmount = Number(inv.totalAmount);
+            const paidAmount = toNumber(inv.amountAllocated);
+            const balance = Math.max(toNumber(inv.amountRemaining ?? totalAmount - paidAmount), 0);
+            const isPaid = balance <= AMOUNT_TOLERANCE;
+            const isPartial = !isPaid && paidAmount > AMOUNT_TOLERANCE;
 
             return {
                 id: inv.id,
-                date: inv.date,
+                date: toISOString(inv.date),
                 flow: inv.flow,
                 letter: inv.letter,
-                pointOfSale: inv.pointOfSale,
-                number: inv.number,
+                pointOfSale: Number(inv.pointOfSale),
+                number: Number(inv.number),
                 netAmount: Number(inv.netAmount),
                 vatAmount: Number(inv.vatAmount),
-                totalAmount: invoiceTotal,
-                paidAmount: paidAmount,
-                balance: remaining,
+                totalAmount,
+                paidAmount,
+                balance,
                 isPaid,
                 paymentStatus: isPaid ? 'PAID' : isPartial ? 'PARTIAL' : 'PENDING',
             };
         });
 
-        const serializedPayments = payments.map(p => ({
-            id: p.id,
-            date: p.date,
-            type: p.type,
-            method: p.method,
-            amount: Number(p.amount),
-            reference: p.reference,
-            notes: p.notes,
-            invoiceId: p.invoiceId,
-            invoice: p.invoice ? {
-                letter: p.invoice.letter,
-                pointOfSale: p.invoice.pointOfSale,
-                number: p.invoice.number,
-            } : null,
+        const paymentEntries = payments.flatMap(payment => {
+            const base = {
+                type: payment.type,
+                method: payment.method,
+                date: toISOString(payment.date),
+                reference: payment.reference,
+                notes: payment.notes,
+            };
+
+            const entries: Array<{
+                id: string;
+                amount: number;
+                invoiceId: string | null;
+                invoice: { letter: string; pointOfSale: number; number: number } | null;
+            } & typeof base> = [];
+
+            if (payment.invoice && payment.invoice.contactId === contactId) {
+                entries.push({
+                    ...base,
+                    id: `${payment.id}:invoice`,
+                    amount: Number(payment.amount),
+                    invoiceId: payment.invoice.id,
+                    invoice: {
+                        letter: payment.invoice.letter,
+                        pointOfSale: Number(payment.invoice.pointOfSale),
+                        number: Number(payment.invoice.number),
+                    },
+                });
+            }
+
+            payment.allocations
+                .filter(allocation => allocation.invoice?.contactId === contactId)
+                .forEach(allocation => {
+                    if (!allocation.invoice) return;
+                    entries.push({
+                        ...base,
+                        id: `${payment.id}:allocation:${allocation.id}`,
+                        amount: Number(allocation.amount),
+                        invoiceId: allocation.invoice.id,
+                        invoice: {
+                            letter: allocation.invoice.letter,
+                            pointOfSale: Number(allocation.invoice.pointOfSale),
+                            number: Number(allocation.invoice.number),
+                        },
+                    });
+                });
+
+            if (!entries.length && payment.contactId === contactId) {
+                entries.push({
+                    ...base,
+                    id: `${payment.id}:contact`,
+                    amount: Number(payment.amount),
+                    invoiceId: null,
+                    invoice: null,
+                });
+            }
+
+            return entries;
+        });
+
+        const serializedPayments = paymentEntries.map(entry => ({
+            id: entry.id,
+            date: entry.date,
+            type: entry.type,
+            method: entry.method,
+            amount: entry.amount,
+            reference: entry.reference,
+            notes: entry.notes,
+            invoiceId: entry.invoiceId,
+            invoice: entry.invoice,
         }));
 
-        totalPaid = serializedPayments.reduce((sum, p) => sum + p.amount, 0);
+        const totalInvoiced = serializedInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+        const totalPaid = serializedInvoices.reduce((sum, inv) => sum + inv.paidAmount, 0);
 
         // Create combined timeline
         const timeline = [
@@ -114,7 +196,7 @@ export async function getContactStatement(contactId: string) {
                 ...pay,
                 itemType: 'payment' as const,
             })),
-        ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        ].sort((a, b) => ensureTimestamp(b.date) - ensureTimestamp(a.date));
 
         const serializedPurchaseOrders = purchaseOrders.map(po => {
             const total = Number(po.total);
@@ -123,8 +205,8 @@ export async function getContactStatement(contactId: string) {
                 id: po.id,
                 orderNumber: po.orderNumber,
                 status: po.status,
-                issueDate: po.issueDate,
-                expectedDate: po.expectedDate,
+                issueDate: toISOString(po.issueDate),
+                expectedDate: toISOString(po.expectedDate),
                 total,
                 invoicedAmount: invoiced,
                 remainingAmount: total - invoiced,

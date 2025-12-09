@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getInvoiceDetail } from "@/actions/invoices";
 import { getTreasuryAccounts } from "@/actions/treasury";
+import { getRetentionSettings } from "@/actions/retentions";
 import { getActiveOrganizationId } from "@/lib/organization";
 import InvoiceDetailView from "../../invoices/invoice-detail-view";
 
@@ -12,9 +13,10 @@ export default async function SalesInvoiceDetailPage({
     const { invoiceId } = await params;
     const organizationId = await getActiveOrganizationId();
 
-    const [invoiceRes, treasuryRes] = await Promise.all([
+    const [invoiceRes, treasuryRes, retentionSettingsRes] = await Promise.all([
         getInvoiceDetail(organizationId, invoiceId),
         getTreasuryAccounts(organizationId),
+        getRetentionSettings(organizationId),
     ]);
 
     if (!invoiceRes.success || !invoiceRes.data) {
@@ -28,6 +30,7 @@ export default async function SalesInvoiceDetailPage({
     }
 
     const treasuryAccounts = treasuryRes.success && treasuryRes.data ? treasuryRes.data : [];
+    const retentionSettings = retentionSettingsRes.success && retentionSettingsRes.data ? retentionSettingsRes.data : [];
 
     return (
         <InvoiceDetailView
@@ -35,6 +38,7 @@ export default async function SalesInvoiceDetailPage({
             organizationId={organizationId}
             treasuryAccounts={treasuryAccounts}
             backHref="/dashboard/sales"
+            retentionSettings={retentionSettings}
         />
     );
 }

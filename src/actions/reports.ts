@@ -2,7 +2,7 @@
 
 import { db } from "@/lib/db";
 import { auth } from "@clerk/nextjs/server";
-import { InvoiceLetter, PaymentType } from "@prisma/client";
+import { InvoiceLetter, PaymentType, Prisma } from "@prisma/client";
 
 const MONTH_LABELS = [
     "Ene",
@@ -77,6 +77,11 @@ function buildMonthSequence(endYear: number, endMonthIndex: number, length: numb
         };
     });
 }
+
+const AMOUNT_TOLERANCE = 0.01;
+
+const toNumber = (value: Prisma.Decimal | number | null | undefined) =>
+    value === null || value === undefined ? 0 : Number(value);
 
 function formatInvoiceNumber(letter: InvoiceLetter, pointOfSale: number, number: number) {
     return `${letter} ${String(pointOfSale).padStart(4, '0')}-${String(number).padStart(8, '0')}`;
@@ -230,9 +235,6 @@ export async function getDashboardMetrics(organizationId: string, filter?: Dashb
                 dueDate: { lt: new Date() },
             },
             include: {
-                payments: {
-                    select: { amount: true, type: true },
-                },
                 contact: {
                     select: { id: true, name: true },
                 },
@@ -243,11 +245,9 @@ export async function getDashboardMetrics(organizationId: string, filter?: Dashb
         const overdueInvoices: OverdueInvoiceEntry[] = overdueInvoicesRaw
             .map(invoice => {
                 const totalAmount = Number(invoice.totalAmount);
-                const paidAmount = invoice.payments
-                    .filter(payment => payment.type === PaymentType.COLLECTION)
-                    .reduce((sum, payment) => sum + Number(payment.amount), 0);
-                const balance = totalAmount - paidAmount;
-                if (balance <= 1) return null;
+                const paidAmount = toNumber(invoice.amountAllocated);
+                const balance = Math.max(toNumber(invoice.amountRemaining ?? totalAmount - paidAmount), 0);
+                if (balance <= AMOUNT_TOLERANCE) return null;
 
                 const dueDate = invoice.dueDate ? invoice.dueDate.toISOString() : null;
                 const daysOverdue = invoice.dueDate

@@ -34,6 +34,9 @@ model Organization {
   contacts         Contact[]
   products         Product[]
   payments         Payment[]
+  paymentAllocations PaymentAllocation[]
+  retentions       Retention[]
+  retentionSettings RetentionSetting[]
   accountingConfig AccountingConfig?
   fiscalPeriods    FiscalPeriod[]
   treasuryAccounts TreasuryAccount[]
@@ -80,6 +83,10 @@ model Account {
   // Relations with Treasury
   treasuryAccounts TreasuryAccount[]
 
+  // Retention specific relations
+  retentionReceivableConfigs RetentionSetting[] @relation("RetentionReceivableAccount")
+  retentionPayableConfigs   RetentionSetting[] @relation("RetentionPayableAccount")
+
   @@unique([organizationId, code])
 }
 
@@ -94,6 +101,7 @@ model JournalEntry {
   lines     TransactionLine[]
   invoices  Invoice[]
   payments  Payment[]
+  retentions Retention[]
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 }
@@ -129,7 +137,8 @@ model Contact {
 
   invoices Invoice[]
   purchaseOrders PurchaseOrder[]
-
+  payments Payment[]
+  retentions Retention[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   attachments Attachment[]
@@ -178,9 +187,12 @@ model Invoice {
   netAmount   Decimal // Neto Gravado
   vatAmount   Decimal // IVA
   totalAmount Decimal
+  amountAllocated Decimal @default(0)
+  amountRemaining Decimal @default(0)
 
   items    InvoiceItem[]
   payments Payment[]
+  retentions Retention[]
 
   // Vinculación con asiento contable generado
   journalEntryId String?
@@ -192,6 +204,7 @@ model Invoice {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   attachments Attachment[]
+  allocations PaymentAllocation[]
 
 }
 
@@ -384,9 +397,14 @@ model Payment {
   type      PaymentType
   method    PaymentMethod
   amount    Decimal
+  amountAllocated Decimal @default(0)
+  amountRemaining Decimal @default(0)
   date      DateTime
   reference String? // Número de cheque, transferencia, etc.
   notes     String?
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id])
 
   // Vinculación con facturas
   invoiceId String?
@@ -401,9 +419,34 @@ model Payment {
   treasuryAccount   TreasuryAccount? @relation(fields: [treasuryAccountId], references: [id])
 
   attachments Attachment[]
+  allocations  PaymentAllocation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model PaymentAllocation {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  paymentId   String?
+  payment     Payment?   @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  retentionId String?
+  retention   Retention? @relation(fields: [retentionId], references: [id], onDelete: Cascade)
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  amount Decimal
+  notes  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([paymentId])
+  @@index([retentionId])
+  @@index([invoiceId])
 }
 
 model AccountingConfig {
@@ -432,6 +475,64 @@ model AccountingConfig {
   cashAccount   Account? @relation("CashAccount", fields: [cashAccountId], references: [id])
   bankAccountId String?
   bankAccount   Account? @relation("BankAccount", fields: [bankAccountId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RetentionSetting {
+  id             String            @id @default(uuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id])
+
+  name        String
+  code        String?
+  description String?
+  appliesTo   InvoiceFlow?
+  defaultRate Decimal?        @default(0)
+
+  receivableAccountId String?
+  receivableAccount   Account? @relation("RetentionReceivableAccount", fields: [receivableAccountId], references: [id])
+
+  payableAccountId String?
+  payableAccount   Account? @relation("RetentionPayableAccount", fields: [payableAccountId], references: [id])
+
+  retentions Retention[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, name])
+  @@unique([organizationId, code])
+}
+
+model Retention {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id])
+
+  retentionSettingId String
+  retentionSetting   RetentionSetting @relation(fields: [retentionSettingId], references: [id])
+  typeName           String
+  typeCode           String?
+
+  baseAmount Decimal
+  rate       Decimal
+  amount     Decimal
+  certificateNumber String?
+  certificateDate   DateTime?
+  notes             String?
+
+  journalEntryId String?
+  journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id])
+
+  allocations PaymentAllocation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

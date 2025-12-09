@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { SerializedInvoiceDetail } from "@/actions/invoices";
 import { createPayment } from "@/actions/payments";
+import { recordRetention, type SerializedRetentionSetting } from "@/actions/retentions";
 import FileUploader from "@/components/file-uploader";
 import AttachmentViewer from "@/components/attachment-viewer";
 import { parseLocalDate } from "@/lib/date-utils";
@@ -17,6 +18,7 @@ import {
     FileText,
     Package,
     ReceiptText,
+    Shield,
     Wallet,
 } from "lucide-react";
 
@@ -28,6 +30,8 @@ const paymentMethodLabels: Record<PaymentMethod, string> = {
     DEBIT_CARD: "Tarjeta de Débito",
     OTHER: "Otro",
 };
+
+const EMPTY_RETENTION_SETTINGS: SerializedRetentionSetting[] = [];
 
 function formatCurrency(value: number) {
     return new Intl.NumberFormat("es-AR", {
@@ -55,13 +59,17 @@ type InvoiceDetailViewProps = {
     organizationId: string;
     treasuryAccounts: TreasuryAccountSummary[];
     backHref: string;
+    retentionSettings?: SerializedRetentionSetting[];
 };
 
-export default function InvoiceDetailView({ invoice, organizationId, treasuryAccounts, backHref }: InvoiceDetailViewProps) {
+export default function InvoiceDetailView({ invoice, organizationId, treasuryAccounts, backHref, retentionSettings }: InvoiceDetailViewProps) {
     const paymentType = invoice.flow === "SALE" ? "COLLECTION" : "PAYMENT";
     const paymentLabel = paymentType === "COLLECTION" ? "Cobranza" : "Pago";
 
+    const retentionSettingsList = retentionSettings ?? EMPTY_RETENTION_SETTINGS;
+
     const [payments, setPayments] = useState(invoice.payments);
+    const [retentions, setRetentions] = useState(invoice.retentions);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [formData, setFormData] = useState({
         method: PaymentMethod.CASH as PaymentMethod,
@@ -71,6 +79,52 @@ export default function InvoiceDetailView({ invoice, organizationId, treasuryAcc
         reference: "",
         notes: "",
     });
+    const [isAddingRetention, setIsAddingRetention] = useState(false);
+    const [isSubmittingRetention, setIsSubmittingRetention] = useState(false);
+
+    const applicableRetentionSettings = useMemo(
+        () =>
+            retentionSettingsList.filter(setting =>
+                setting.appliesTo ? setting.appliesTo === invoice.flow : true,
+            ),
+        [retentionSettingsList, invoice.flow],
+    );
+
+    const [retentionForm, setRetentionForm] = useState({
+        retentionSettingId: applicableRetentionSettings[0]?.id || "",
+        baseAmount: invoice.totalAmount,
+        rate: applicableRetentionSettings[0]?.defaultRate ?? 0,
+        amount:
+            applicableRetentionSettings[0]?.defaultRate
+                ? Number(((invoice.totalAmount * (applicableRetentionSettings[0].defaultRate ?? 0)) / 100).toFixed(2))
+                : 0,
+        certificateNumber: "",
+        certificateDate: new Date().toISOString().split("T")[0],
+        notes: "",
+    });
+
+    useEffect(() => {
+        if (applicableRetentionSettings.length === 0) {
+            return;
+        }
+
+        setRetentionForm(prev => {
+            const nextSettingId = applicableRetentionSettings[0]?.id || "";
+            if (prev.retentionSettingId && applicableRetentionSettings.some(s => s.id === prev.retentionSettingId)) {
+                return prev;
+            }
+
+            const fallbackRate = applicableRetentionSettings[0]?.defaultRate ?? 0;
+            return {
+                ...prev,
+                retentionSettingId: nextSettingId,
+                rate: fallbackRate ?? 0,
+                amount: fallbackRate
+                    ? Number(((prev.baseAmount * fallbackRate) / 100).toFixed(2))
+                    : 0,
+            };
+        });
+    }, [applicableRetentionSettings]);
 
     useEffect(() => {
         setFormData(prev => ({
@@ -98,11 +152,16 @@ export default function InvoiceDetailView({ invoice, organizationId, treasuryAcc
 
     const relevantPayments = payments.filter(p => p.type === paymentType);
     const paidAmount = relevantPaymentsTotal(payments, paymentType);
-    const remainingAmount = Math.max(invoice.totalAmount - paidAmount, 0);
+    const retentionTotal = useMemo(() => retentions.reduce((sum, retention) => sum + retention.amount, 0), [retentions]);
+    const remainingAmount = Math.max(invoice.totalAmount - paidAmount - retentionTotal, 0);
 
     useEffect(() => {
         setFormData(prev => ({ ...prev, amount: remainingAmount }));
     }, [remainingAmount]);
+
+    const hasRetentionSettings = applicableRetentionSettings.length > 0;
+    const canAddRetention = remainingAmount > 0 && hasRetentionSettings;
+    const selectedRetentionSetting = applicableRetentionSettings.find(setting => setting.id === retentionForm.retentionSettingId) ?? null;
 
     const handleSubmit = async (event: React.FormEvent) => {
         event.preventDefault();
@@ -163,6 +222,63 @@ export default function InvoiceDetailView({ invoice, organizationId, treasuryAcc
         }));
     };
 
+    const handleRetentionSubmit = async (event: React.FormEvent) => {
+        event.preventDefault();
+        if (retentionForm.amount <= 0) {
+            toast.error("El monto de la retención debe ser mayor a 0");
+            return;
+        }
+        if (retentionForm.amount - remainingAmount > 0.01) {
+            toast.error("El monto supera el saldo pendiente de la factura");
+            return;
+        }
+
+        setIsSubmittingRetention(true);
+        const loading = toast.loading("Registrando retención...");
+        if (!retentionForm.retentionSettingId) {
+            toast.error("Seleccioná un tipo de retención");
+            return;
+        }
+
+        const res = await recordRetention({
+            organizationId,
+            invoiceId: invoice.id,
+            retentionSettingId: retentionForm.retentionSettingId,
+            baseAmount: retentionForm.baseAmount,
+            rate: retentionForm.rate,
+            amount: retentionForm.amount,
+            certificateNumber: retentionForm.certificateNumber || undefined,
+            certificateDate: retentionForm.certificateDate ? parseLocalDate(retentionForm.certificateDate) : undefined,
+            notes: retentionForm.notes || undefined,
+        });
+        toast.dismiss(loading);
+        setIsSubmittingRetention(false);
+
+        if (!res.success || !res.data) {
+            toast.error(res.error || "No se pudo registrar la retención");
+            return;
+        }
+
+        toast.success("Retención registrada correctamente");
+        setRetentions(prev => [
+            {
+                ...res.data,
+                amount: Number(res.data.amount),
+                baseAmount: Number(res.data.baseAmount),
+                rate: Number(res.data.rate),
+            },
+            ...prev,
+        ]);
+        setRetentionForm(prev => ({
+            ...prev,
+            baseAmount: Math.max(remainingAmount - retentionForm.amount, 0),
+            amount: Math.max(remainingAmount - retentionForm.amount, 0),
+            certificateNumber: "",
+            notes: "",
+        }));
+        setIsAddingRetention(false);
+    };
+
     return (
         <div className="space-y-6">
             <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -181,11 +297,16 @@ export default function InvoiceDetailView({ invoice, organizationId, treasuryAcc
                             {invoice.letter} {String(invoice.pointOfSale).padStart(4, "0")}-{String(invoice.number).padStart(8, "0")}
                         </h1>
                         <p className="text-gray-500">Emitida el {formatDate(invoice.date)}</p>
+                        {retentionTotal > 0 && (
+                            <p className="text-gray-500 text-sm">Retenciones aplicadas: {formatCurrency(retentionTotal)}</p>
+                        )}
                     </div>
                     <div className="text-right">
                         <p className="text-sm text-gray-500">Total</p>
                         <p className="text-3xl font-bold text-gray-900">{formatCurrency(invoice.totalAmount)}</p>
-                        <p className={cn("text-sm font-medium", remainingAmount > 0 ? "text-orange-600" : "text-green-600")}>Restante: {formatCurrency(remainingAmount)}</p>
+                        <p className={cn("text-sm font-medium", remainingAmount > 0 ? "text-orange-600" : "text-green-600")}>
+                            Restante: {formatCurrency(remainingAmount)}
+                        </p>
                     </div>
                 </div>
 
@@ -286,6 +407,214 @@ export default function InvoiceDetailView({ invoice, organizationId, treasuryAcc
                                     </div>
                                 ))}
                             </div>
+                        )}
+                    </div>
+
+                    <div className="bg-white border border-gray-200 rounded-2xl shadow-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-gray-100">
+                            <div className="flex items-center gap-2">
+                                <Shield className="h-5 w-5 text-gray-500" />
+                                <h2 className="text-base font-semibold text-gray-900">Retenciones</h2>
+                            </div>
+                            <p className="text-sm text-gray-500">Total aplicado: {formatCurrency(retentionTotal)}</p>
+                        </div>
+                        {retentions.length === 0 ? (
+                            <div className="px-6 py-8 text-center text-gray-500">Aún no registraste retenciones.</div>
+                        ) : (
+                            <div className="divide-y divide-gray-100">
+                                {retentions.map(retention => (
+                                    <div key={retention.id} className="px-6 py-4 flex flex-col gap-1">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <p className="text-sm font-semibold text-gray-900">
+                                                {retention.typeName} · {formatCurrency(retention.amount)}
+                                            </p>
+                                            <p className="text-xs text-gray-500">
+                                                Certificado: {retention.certificateNumber || "Sin número"}
+                                            </p>
+                                        </div>
+                                        <div className="text-xs text-gray-500 flex flex-wrap gap-4">
+                                            <span>Base: {formatCurrency(retention.baseAmount)}</span>
+                                            <span>Tasa: {Number(retention.rate).toFixed(2)}%</span>
+                                            <span>Fecha: {formatDate(retention.certificateDate)}</span>
+                                        </div>
+                                        {retention.notes && (
+                                            <p className="text-xs text-gray-500">Notas: {retention.notes}</p>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="px-6 py-4 border-t border-gray-100 flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setIsAddingRetention(prev => !prev)}
+                                disabled={!canAddRetention}
+                                className={cn(
+                                    "inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium",
+                                    canAddRetention
+                                        ? "bg-gray-900 text-white hover:bg-gray-800"
+                                        : "bg-gray-100 text-gray-400 cursor-not-allowed",
+                                )}
+                            >
+                                {isAddingRetention ? "Cerrar" : "Registrar retención"}
+                            </button>
+                            {!hasRetentionSettings && (
+                                <p className="text-xs text-red-500 self-center">
+                                    Configurá tipos de retención en Settings para poder registrarlas.
+                                </p>
+                            )}
+                            {!canAddRetention && hasRetentionSettings && (
+                                <p className="text-xs text-red-500 self-center">La factura ya no tiene saldo pendiente.</p>
+                            )}
+                        </div>
+                        {isAddingRetention && (
+                            <form className="px-6 pb-6 space-y-4 border-t border-gray-100" onSubmit={handleRetentionSubmit}>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de retención</label>
+                                        <select
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                            value={retentionForm.retentionSettingId}
+                                            onChange={event => {
+                                                const nextSetting = applicableRetentionSettings.find(setting => setting.id === event.target.value) ?? null;
+                                                setRetentionForm(prev => ({
+                                                    ...prev,
+                                                    retentionSettingId: event.target.value,
+                                                    rate: nextSetting?.defaultRate ?? 0,
+                                                    amount: nextSetting?.defaultRate
+                                                        ? Number(((prev.baseAmount * (nextSetting.defaultRate ?? 0)) / 100).toFixed(2))
+                                                        : prev.amount,
+                                                }));
+                                            }}
+                                        >
+                                            {applicableRetentionSettings.map(setting => (
+                                                <option key={setting.id} value={setting.id}>
+                                                    {setting.name}
+                                                    {setting.code ? ` · ${setting.code}` : ""}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {!hasRetentionSettings && (
+                                            <p className="text-xs text-red-500 mt-1">
+                                                No hay retenciones configuradas para este tipo de comprobante.
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Fecha del certificado</label>
+                                        <input
+                                            type="date"
+                                            value={retentionForm.certificateDate}
+                                            onChange={e =>
+                                                setRetentionForm(prev => ({
+                                                    ...prev,
+                                                    certificateDate: e.target.value,
+                                                }))
+                                            }
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Base imponible</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min={0}
+                                            value={retentionForm.baseAmount}
+                                            onChange={e => {
+                                                const base = Number(e.target.value) || 0;
+                                                setRetentionForm(prev => ({
+                                                    ...prev,
+                                                    baseAmount: base,
+                                                    amount: Number(((base * prev.rate) / 100).toFixed(2)),
+                                                }));
+                                            }}
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Tasa (%)</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min={0}
+                                            value={retentionForm.rate}
+                                            onChange={e => {
+                                                const rate = Number(e.target.value) || 0;
+                                                setRetentionForm(prev => ({
+                                                    ...prev,
+                                                    rate,
+                                                    amount: Number(((prev.baseAmount * rate) / 100).toFixed(2)),
+                                                }));
+                                            }}
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Monto</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            min={0}
+                                            value={retentionForm.amount}
+                                            onChange={e => {
+                                                const amount = Number(e.target.value) || 0;
+                                                setRetentionForm(prev => ({ ...prev, amount }));
+                                            }}
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                        />
+                                        <p className="text-xs text-gray-500 mt-1">
+                                            Saldo disponible: {formatCurrency(remainingAmount)}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Número de certificado</label>
+                                        <input
+                                            type="text"
+                                            value={retentionForm.certificateNumber}
+                                            onChange={e =>
+                                                setRetentionForm(prev => ({
+                                                    ...prev,
+                                                    certificateNumber: e.target.value,
+                                                }))
+                                            }
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                            placeholder="Ej: 001-00001234"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Notas</label>
+                                        <input
+                                            type="text"
+                                            value={retentionForm.notes}
+                                            onChange={e =>
+                                                setRetentionForm(prev => ({
+                                                    ...prev,
+                                                    notes: e.target.value,
+                                                }))
+                                            }
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                                            placeholder="Información adicional"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <button
+                                        type="submit"
+                                        disabled={isSubmittingRetention}
+                                        className={cn(
+                                            "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium",
+                                            isSubmittingRetention ? "bg-gray-200 text-gray-500" : "bg-gray-900 text-white hover:bg-gray-800",
+                                        )}
+                                    >
+                                        {isSubmittingRetention ? "Guardando..." : "Guardar retención"}
+                                    </button>
+                                </div>
+                            </form>
                         )}
                     </div>
                 </div>

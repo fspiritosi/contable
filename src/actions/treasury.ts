@@ -3,7 +3,7 @@
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { auth } from "@clerk/nextjs/server";
-import { AccountType, PaymentMethod, PaymentType } from "@prisma/client";
+import { AccountType, ContactType, PaymentMethod, PaymentType } from "@prisma/client";
 import { getActiveOrganizationId } from "@/lib/organization";
 
 export async function getTreasuryAccounts(organizationId: string) {
@@ -37,6 +37,7 @@ export async function createTreasuryMovement(data: {
     date: string;
     description?: string;
     amount: number;
+    contactId?: string;
 }) {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
@@ -50,12 +51,13 @@ export async function createTreasuryMovement(data: {
 
         const parsedDate = data.date ? new Date(data.date) : new Date();
 
-        const [treasuryAccount, selectedAccount] = await Promise.all([
+        const [treasuryAccount, selectedAccount, contact] = await Promise.all([
             db.treasuryAccount.findUnique({
                 where: { id: data.treasuryAccountId },
                 include: { account: true },
             }),
             db.account.findUnique({ where: { id: data.accountId } }),
+            data.contactId ? db.contact.findUnique({ where: { id: data.contactId } }) : Promise.resolve(null),
         ]);
 
         if (!treasuryAccount || treasuryAccount.organizationId !== organizationId) {
@@ -72,6 +74,21 @@ export async function createTreasuryMovement(data: {
 
         const movementType: PaymentType = increasesTreasury ? 'COLLECTION' : 'PAYMENT';
         const balanceChange = increasesTreasury ? parsedAmount : -parsedAmount;
+
+        if (contact) {
+            if (contact.organizationId !== organizationId) {
+                return { success: false, error: "Contacto inválido" };
+            }
+            const expectedType = movementType === 'COLLECTION' ? ContactType.CUSTOMER : ContactType.VENDOR;
+            if (contact.type !== expectedType) {
+                return {
+                    success: false,
+                    error: movementType === 'COLLECTION'
+                        ? "Solo podés asociar clientes a cobranzas manuales"
+                        : "Solo podés asociar proveedores a pagos manuales",
+                };
+            }
+        }
 
         const journalEntry = await db.journalEntry.create({
             data: {
@@ -117,6 +134,7 @@ export async function createTreasuryMovement(data: {
                 notes: data.description,
                 treasuryAccountId: treasuryAccount.id,
                 journalEntryId: journalEntry.id,
+                contactId: contact?.id,
             },
         });
 

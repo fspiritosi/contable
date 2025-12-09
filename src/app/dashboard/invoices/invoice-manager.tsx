@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Invoice, InvoiceItem, InvoiceFlow, InvoiceLetter, Contact } from "@prisma/client";
-import { createInvoice, getNextInvoiceSequence } from "@/actions/invoices";
+import { createInvoice, deleteInvoice, getNextInvoiceSequence, updateInvoice } from "@/actions/invoices";
 import { SerializedProduct } from "@/actions/products";
 import type { SerializedPurchaseOrder } from "@/actions/purchase-orders";
 import { Plus, FileText, ArrowUpRight, ArrowDownLeft, Trash2, Paperclip, X, Search, ArrowUpDown } from "lucide-react";
@@ -21,7 +21,9 @@ type SerializedInvoiceItem = Omit<InvoiceItem, 'quantity' | 'unitPrice' | 'vatRa
     total: number;
 };
 
-const PAYMENT_STATUS_STYLES: Record<InvoicePaymentStatus, { label: string; badgeClass: string }> = {
+type PaymentBadge = { label: string; badgeClass: string };
+
+const PAYMENT_STATUS_STYLES: Record<InvoicePaymentStatus, PaymentBadge> = {
     PAID: {
         label: 'Pagada',
         badgeClass: 'bg-green-50 text-green-700 border border-green-200',
@@ -99,6 +101,7 @@ interface InvoiceManagerProps {
 export default function InvoiceManager({ initialInvoices, contacts, products, organizationId, defaultFlow = "ALL", hideFlowFilters = false, purchaseOrders = [], initialPurchaseOrderId }: InvoiceManagerProps) {
     const [invoices, setInvoices] = useState<SerializedInvoice[]>(initialInvoices);
     const [isCreating, setIsCreating] = useState(Boolean(initialPurchaseOrderId));
+    const [editingInvoice, setEditingInvoice] = useState<SerializedInvoice | null>(null);
     const initialFilter = useMemo<InvoiceFlow | 'ALL'>(() => defaultFlow, [defaultFlow]);
     const [filter, setFilter] = useState<InvoiceFlow | 'ALL'>(initialFilter);
     const [activeAttachmentInvoiceId, setActiveAttachmentInvoiceId] = useState<string | null>(null);
@@ -110,7 +113,7 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
     const [page, setPage] = useState(1);
 
     const enforcedFlow = defaultFlow !== 'ALL' ? defaultFlow : undefined;
-    const [newInvoice, setNewInvoice] = useState<InvoiceFormState>({
+    const buildDefaultFormState = (): InvoiceFormState => ({
         flow: (enforcedFlow ?? "SALE") as InvoiceFlow,
         letter: "A" as InvoiceLetter,
         pointOfSale: 1,
@@ -118,8 +121,10 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
         date: new Date().toISOString().split('T')[0],
         dueDate: "",
         contactId: "",
-        items: [{ productId: "", description: "", quantity: 1, unitPrice: 0, vatRate: 21 }]
+        items: [{ productId: "", description: "", quantity: 1, unitPrice: 0, vatRate: 21 }],
     });
+
+    const [newInvoice, setNewInvoice] = useState<InvoiceFormState>(buildDefaultFormState);
     const [hasManualPointOfSale, setHasManualPointOfSale] = useState(false);
     const [hasManualNumber, setHasManualNumber] = useState(false);
     const [isSequenceLoading, setIsSequenceLoading] = useState(false);
@@ -227,10 +232,10 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
         }
     }, [selectedPurchaseOrder, newInvoice.contactId]);
 
-    const handleCreate = async (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        const loadingToast = toast.loading("Guardando factura...");
-        const res = await createInvoice({
+        const loadingToast = toast.loading(editingInvoice ? "Actualizando factura..." : "Guardando factura...");
+        const payload = {
             ...newInvoice,
             organizationId,
             date: parseLocalDate(newInvoice.date),
@@ -240,15 +245,69 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                 total: i.quantity * i.unitPrice // This will be recalculated on server but good for UI if we showed it
             })),
             purchaseOrderId: selectedPurchaseOrderId || undefined,
-        });
+        };
+
+        const res = editingInvoice
+            ? await updateInvoice(editingInvoice.id, payload)
+            : await createInvoice(payload);
 
         toast.dismiss(loadingToast);
 
-        if (res.success && res.data) {
-            toast.success("Factura creada exitosamente");
+        if (res.success) {
+            toast.success(editingInvoice ? "Factura actualizada" : "Factura creada exitosamente");
             window.location.reload();
         } else {
-            toast.error(res.error || "Error al crear la factura");
+            toast.error(res.error || (editingInvoice ? "Error al actualizar la factura" : "Error al crear la factura"));
+        }
+    };
+
+    const resetForm = () => {
+        setNewInvoice(buildDefaultFormState());
+        setSelectedPurchaseOrderId("");
+        setEditingInvoice(null);
+        setHasManualNumber(false);
+        setHasManualPointOfSale(false);
+    };
+
+    const formatDateInput = (value?: string | Date | null) =>
+        value ? new Date(value).toISOString().split("T")[0] : "";
+
+    const startEditingInvoice = (invoice: SerializedInvoice) => {
+        setEditingInvoice(invoice);
+        setSelectedPurchaseOrderId(invoice.purchaseOrderId ?? "");
+        setHasManualNumber(true);
+        setHasManualPointOfSale(true);
+        setIsCreating(true);
+        setNewInvoice({
+            flow: invoice.flow,
+            letter: invoice.letter,
+            pointOfSale: Number(invoice.pointOfSale),
+            number: Number(invoice.number),
+            date: formatDateInput(invoice.date),
+            dueDate: formatDateInput(invoice.dueDate as any),
+            contactId: invoice.contactId ?? "",
+            items: invoice.items.map(item => ({
+                productId: item.productId ?? "",
+                description: item.description,
+                quantity: Number(item.quantity),
+                unitPrice: Number(item.unitPrice),
+                vatRate: Number(item.vatRate),
+                purchaseOrderItemId: item.purchaseOrderItemId ?? undefined,
+            })),
+        });
+    };
+
+    const handleDeleteInvoice = async (invoice: SerializedInvoice) => {
+        const confirmed = window.confirm("¿Eliminar definitivamente esta factura?");
+        if (!confirmed) return;
+        const loadingToast = toast.loading("Eliminando factura...");
+        const res = await deleteInvoice(invoice.id, organizationId);
+        toast.dismiss(loadingToast);
+        if (res.success) {
+            toast.success("Factura eliminada");
+            window.location.reload();
+        } else {
+            toast.error(res.error || "No se pudo eliminar la factura");
         }
     };
 
@@ -475,7 +534,11 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                     />
                                 </div>
                                 <button
-                                    onClick={() => setIsCreating(true)}
+                                    type="button"
+                                    onClick={() => {
+                                        resetForm();
+                                        setIsCreating(true);
+                                    }}
                                     className="flex items-center gap-2 text-sm bg-gray-900 text-white px-3 py-1.5 rounded-md hover:bg-gray-800 transition-colors"
                                 >
                                     <Plus className="h-4 w-4" />
@@ -654,12 +717,32 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
                                                     </button>
                                                 </td>
                                                 <td className="px-4 py-3 text-right">
-                                                    <Link
-                                                        href={detailHref}
-                                                        className="text-sm font-medium text-gray-900 hover:text-gray-600"
-                                                    >
-                                                        Ver detalle →
-                                                    </Link>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        {invoice.paymentStatus === 'PENDING' && (
+                                                            <>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => startEditingInvoice(invoice)}
+                                                                    className="text-xs font-medium text-blue-600 hover:text-blue-800"
+                                                                >
+                                                                    Editar
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleDeleteInvoice(invoice)}
+                                                                    className="text-xs font-medium text-red-600 hover:text-red-800"
+                                                                >
+                                                                    Eliminar
+                                                                </button>
+                                                            </>
+                                                        )}
+                                                        <Link
+                                                            href={detailHref}
+                                                            className="text-sm font-medium text-gray-900 hover:text-gray-600"
+                                                        >
+                                                            Ver detalle →
+                                                        </Link>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         );
@@ -724,13 +807,16 @@ export default function InvoiceManager({ initialInvoices, contacts, products, or
             ) : (
                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
                     <div className="flex justify-between items-center mb-6">
-                        <h3 className="font-semibold text-lg text-gray-900">Nueva Factura</h3>
-                        <button onClick={() => setIsCreating(false)} className="text-sm text-gray-500 hover:text-gray-900">
+                        <h3 className="font-semibold text-lg text-gray-900">{editingInvoice ? "Editar Factura" : "Nueva Factura"}</h3>
+                        <button onClick={() => {
+                            setIsCreating(false);
+                            resetForm();
+                        }} className="text-sm text-gray-500 hover:text-gray-900">
                             Cancelar
                         </button>
                     </div>
 
-                    <form onSubmit={handleCreate} className="space-y-6">
+                    <form onSubmit={handleSubmit} className="space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de Comprobante</label>

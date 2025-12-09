@@ -1,7 +1,7 @@
 import { getOrganizations } from "@/actions/organizations";
 import OrganizationManager from "./organization-manager";
 import Link from "next/link";
-import { Settings2, Calendar, Building2 } from "lucide-react";
+import { Settings2, Calendar, Building2, Shield } from "lucide-react";
 
 export default async function SettingsPage() {
     const { data: organizations } = await getOrganizations();
@@ -58,6 +58,22 @@ export default async function SettingsPage() {
                         </div>
                         <p className="text-sm text-gray-500">
                             Gestiona los ejercicios contables y períodos de operación
+                        </p>
+                    </div>
+                </Link>
+
+                <Link href="/dashboard/settings/retentions" className="block group">
+                    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 hover:shadow-md transition-shadow">
+                        <div className="flex items-center gap-3 mb-2">
+                            <div className="p-2 bg-yellow-100 rounded-lg">
+                                <Shield className="h-5 w-5 text-yellow-600" />
+                            </div>
+                            <h3 className="font-semibold text-gray-900 group-hover:text-yellow-600 transition-colors">
+                                Retenciones
+                            </h3>
+                        </div>
+                        <p className="text-sm text-gray-500">
+                            Gestioná tipos de retención, tasas sugeridas y cuentas contables asociadas
                         </p>
                     </div>
                 </Link>

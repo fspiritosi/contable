@@ -4,6 +4,8 @@ import { getActiveOrganizationId } from "@/lib/organization";
 import { getTreasuryAccountDetail } from "@/actions/treasury";
 import { getTreasuryAccountMovements } from "@/actions/payments";
 import { getAccounts } from "@/actions/accounts";
+import { getContacts } from "@/actions/contacts";
+import { getInvoices } from "@/actions/invoices";
 import { formatCurrency } from "@/lib/utils";
 import TreasuryMovementsSection from "./treasury-movements";
 
@@ -14,10 +16,12 @@ export default async function TreasuryAccountDetailPage({
 }) {
   const { id } = await params;
   const currentOrgId = await getActiveOrganizationId();
-  const [accountRes, movementsRes, accountsRes] = await Promise.all([
+  const [accountRes, movementsRes, accountsRes, contactsRes, invoicesRes] = await Promise.all([
     getTreasuryAccountDetail(id, currentOrgId),
     getTreasuryAccountMovements(id),
     getAccounts(),
+    getContacts(currentOrgId),
+    getInvoices(currentOrgId),
   ]);
 
   if (!accountRes.success || !accountRes.data) {
@@ -32,6 +36,11 @@ export default async function TreasuryAccountDetailPage({
     name: acc.name,
     type: acc.type,
   }));
+  const contacts = (contactsRes.success && contactsRes.data ? contactsRes.data : []).map((contact: any) => ({
+    id: contact.id,
+    name: contact.name,
+    type: contact.type,
+  }));
 
   /**
    * Normalize server data to be client-safe. Ensures dates and decimals are serializable.
@@ -43,6 +52,22 @@ export default async function TreasuryAccountDetailPage({
     method: movement.method,
     reference: movement.reference,
     amount: Number(movement.amount),
+    amountAllocated: Number(movement.amountAllocated ?? 0),
+    amountRemaining: Number(movement.amountRemaining ?? Math.max(Number(movement.amount) - Number(movement.amountAllocated ?? 0), 0)),
+    allocations: (movement.allocations || []).map((allocation: any) => ({
+      id: allocation.id,
+      invoiceId: allocation.invoiceId,
+      amount: Number(allocation.amount),
+      invoice: allocation.invoice
+        ? {
+            id: allocation.invoice.id,
+            letter: allocation.invoice.letter,
+            pointOfSale: Number(allocation.invoice.pointOfSale),
+            number: Number(allocation.invoice.number),
+            contactName: allocation.invoice.contact?.name ?? null,
+          }
+        : null,
+    })),
     invoice: movement.invoice
       ? {
           id: movement.invoice.id,
@@ -53,6 +78,15 @@ export default async function TreasuryAccountDetailPage({
           contactName: movement.invoice.contact?.name ?? null,
         }
       : null,
+    contact: movement.contact
+      ? {
+          id: movement.contact.id,
+          name: movement.contact.name,
+          type: movement.contact.type,
+        }
+      : null,
+    contactId: movement.contactId || movement.contact?.id || movement.invoice?.contact?.id || null,
+    contactName: movement.contactName ?? movement.contact?.name ?? movement.invoice?.contactName ?? null,
   }));
 
   let runningBalance = Number(account.balance);
@@ -72,6 +106,22 @@ export default async function TreasuryAccountDetailPage({
     accountCode: account.account?.code ?? null,
     type: account.type,
   };
+
+  const reconcilableInvoices = (invoicesRes.success && invoicesRes.data ? invoicesRes.data : []).map((invoice: any) => ({
+    id: invoice.id,
+    flow: invoice.flow,
+    letter: invoice.letter,
+    pointOfSale: Number(invoice.pointOfSale),
+    number: Number(invoice.number),
+    date: typeof invoice.date === "string" ? invoice.date : invoice.date?.toISOString() ?? null,
+    dueDate: invoice.dueDate,
+    totalAmount: Number(invoice.totalAmount),
+    amountAllocated: Number(invoice.amountAllocated ?? invoice.paidAmount ?? 0),
+    amountRemaining: Number(invoice.amountRemaining ?? invoice.balance ?? Math.max(Number(invoice.totalAmount) - Number(invoice.paidAmount ?? 0), 0)),
+    paymentStatus: invoice.paymentStatus,
+    contactId: invoice.contactId ?? null,
+    contactName: invoice.contact?.name ?? null,
+  }));
 
   return (
     <div className="space-y-6">
@@ -108,6 +158,9 @@ export default async function TreasuryAccountDetailPage({
         accountType={account.type}
         chartOfAccounts={chartOfAccounts}
         treasuryAccountId={account.id}
+        contacts={contacts}
+        invoices={reconcilableInvoices}
+        organizationId={currentOrgId}
       />
     </div>
   );
