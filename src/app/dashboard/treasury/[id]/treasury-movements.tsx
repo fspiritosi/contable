@@ -20,6 +20,29 @@ const METHOD_LABELS: Record<string, string> = {
   OTHER: "Otro",
 };
 
+const MONTH_LABELS = [
+  "Enero",
+  "Febrero",
+  "Marzo",
+  "Abril",
+  "Mayo",
+  "Junio",
+  "Julio",
+  "Agosto",
+  "Septiembre",
+  "Octubre",
+  "Noviembre",
+  "Diciembre",
+] as const;
+
+const csvValue = (value: string | number | null | undefined) => {
+  if (value === null || value === undefined) {
+    return '""';
+  }
+  const normalized = typeof value === "number" ? String(value) : value;
+  return `"${normalized.replace(/"/g, '""')}"`;
+};
+
 const AMOUNT_TOLERANCE = 0.01;
 
 const expectedFlowByMovement: Record<"PAYMENT" | "COLLECTION", InvoiceFlow> = {
@@ -34,6 +57,22 @@ const toNumber = (value: number | string | null | undefined) => {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return Number(value);
+};
+
+const getDateKey = (value: string | Date | null | undefined) => {
+  if (!value) return "";
+  if (value instanceof Date) {
+    return value.toISOString().split("T")[0];
+  }
+  if (typeof value === "string") {
+    return value.includes("T") ? value.split("T")[0] : value;
+  }
+  return "";
+};
+
+const getMonthKey = (value: string | Date | null | undefined) => {
+  const dateKey = getDateKey(value);
+  return dateKey ? dateKey.slice(0, 7) : "";
 };
 
 export type TreasuryMovement = {
@@ -152,6 +191,9 @@ export default function TreasuryMovementsSection({
   const [isRetentionModalOpen, setIsRetentionModalOpen] = useState(false);
   const [retentionInvoiceId, setRetentionInvoiceId] = useState<string>("");
   const [isSavingRetention, setIsSavingRetention] = useState(false);
+  const [monthFilter, setMonthFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [retentionForm, setRetentionForm] = useState({
     retentionSettingId: retentionSettingsList[0]?.id ?? "",
     baseAmount: 0,
@@ -166,6 +208,93 @@ export default function TreasuryMovementsSection({
     () => retentionSettingsList.find(setting => setting.id === retentionForm.retentionSettingId) ?? null,
     [retentionSettingsList, retentionForm.retentionSettingId],
   );
+
+  const availableMonthOptions = useMemo(() => {
+    const unique = Array.from(
+      new Set(
+        movements
+          .map(movement => getMonthKey(movement.date))
+          .filter(Boolean),
+      ),
+    );
+    return unique
+      .sort((a, b) => b.localeCompare(a))
+      .map(value => {
+        const [year, month] = value.split("-");
+        const index = Number(month) - 1;
+        const label = index >= 0 ? `${MONTH_LABELS[index]} ${year}` : value;
+        return { value, label };
+      });
+  }, [movements]);
+
+  const filteredMovements = useMemo(() => {
+    return movements.filter(movement => {
+      const movementDate = getDateKey(movement.date);
+      const movementMonth = getMonthKey(movement.date);
+
+      if (monthFilter && movementMonth !== monthFilter) {
+        return false;
+      }
+
+      if (dateFrom && movementDate < dateFrom) {
+        return false;
+      }
+
+      if (dateTo && movementDate > dateTo) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [movements, monthFilter, dateFrom, dateTo]);
+
+  const hasActiveFilters = Boolean(monthFilter || dateFrom || dateTo);
+
+  const handleClearFilters = () => {
+    setMonthFilter("");
+    setDateFrom("");
+    setDateTo("");
+  };
+
+  const handleExportCsv = () => {
+    if (!filteredMovements.length) {
+      toast.error("No hay movimientos para exportar");
+      return;
+    }
+
+    const headers = ["Fecha", "Tipo", "Método", "Referencia", "Monto", "Saldo", "Contacto", "Comprobante"];
+    const rows = filteredMovements.map(movement => {
+      const invoiceNumber = movement.invoice
+        ? formatInvoiceNumber(movement.invoice.letter, movement.invoice.pointOfSale, movement.invoice.number)
+        : "";
+      const contactName = movement.contact?.name ?? movement.invoice?.contactName ?? movement.contactName ?? "";
+      return [
+        getDateKey(movement.date),
+        movement.type === "PAYMENT" ? "Pago" : "Cobranza",
+        METHOD_LABELS[movement.method] ?? movement.method,
+        movement.reference ?? "",
+        movement.amount.toFixed(2),
+        movement.runningBalance.toFixed(2),
+        contactName,
+        invoiceNumber,
+      ];
+    });
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(value => csvValue(value)).join(","))
+      .join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const filterSuffix = monthFilter || `${dateFrom || "inicio"}-${dateTo || "fin"}`.replace(/[^0-9-]/g, "");
+    link.download = `movimientos-${treasuryAccountId}-${filterSuffix}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     if (!retentionSettingsList.length) {
@@ -628,63 +757,125 @@ export default function TreasuryMovementsSection({
         {!hasMovements ? (
           <p className="text-sm text-gray-500">Aún no hay movimientos registrados.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-gray-50 text-gray-600 font-medium border-b">
-                <tr>
-                  <th className="px-4 py-3">Fecha</th>
-                  <th className="px-4 py-3">Tipo</th>
-                  <th className="px-4 py-3">Método</th>
-                  <th className="px-4 py-3">Referencia</th>
-                  <th className="px-4 py-3 text-right">Monto</th>
-                  <th className="px-4 py-3 text-right">Saldo</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {movements.map(movement => {
-                  const isSelected = movement.id === selectedMovementId;
-                  return (
-                    <tr
-                      key={movement.id}
-                      className={`text-gray-700 cursor-pointer transition-colors ${
-                        isSelected ? "bg-gray-100" : "hover:bg-gray-50"
-                      }`}
-                      onClick={() => setSelectedMovementId(movement.id)}
-                    >
-                      <td className="px-4 py-3">
-                        {new Date(movement.date).toLocaleDateString("es-AR")}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                            movement.type === "PAYMENT" ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
-                          }`}
-                        >
-                          {movement.type === "PAYMENT" ? "Pago" : "Cobranza"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-500">
-                        {METHOD_LABELS[movement.method] ?? movement.method}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500">
-                        {movement.reference || "-"}
-                      </td>
-                      <td
-                        className={`px-4 py-3 text-right font-medium ${
-                          movement.type === "PAYMENT" ? "text-red-600" : "text-green-600"
-                        }`}
-                      >
-                        {formatCurrency(movement.amount)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold text-gray-900">
-                        {formatCurrency(movement.runningBalance)}
-                      </td>
+          <>
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between mb-4">
+              <div className="flex flex-wrap gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Mes / año</label>
+                  <select
+                    value={monthFilter}
+                    onChange={event => setMonthFilter(event.target.value)}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900 min-w-[180px]"
+                  >
+                    <option value="">Todos los meses</option>
+                    {availableMonthOptions.map(option => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Desde</label>
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    onChange={event => setDateFrom(event.target.value)}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Hasta</label>
+                  <input
+                    type="date"
+                    value={dateTo}
+                    onChange={event => setDateTo(event.target.value)}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  />
+                </div>
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={handleClearFilters}
+                    className="self-end text-xs text-gray-600 hover:text-gray-900"
+                  >
+                    Limpiar filtros
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                className="inline-flex items-center justify-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Descargar CSV
+              </button>
+            </div>
+
+            {filteredMovements.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-gray-50 text-gray-600 font-medium border-b">
+                    <tr>
+                      <th className="px-4 py-3">Fecha</th>
+                      <th className="px-4 py-3">Tipo</th>
+                      <th className="px-4 py-3">Método</th>
+                      <th className="px-4 py-3">Referencia</th>
+                      <th className="px-4 py-3 text-right">Monto</th>
+                      <th className="px-4 py-3 text-right">Saldo</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody className="divide-y">
+                    {filteredMovements.map(movement => {
+                      const isSelected = movement.id === selectedMovementId;
+                      return (
+                        <tr
+                          key={movement.id}
+                          className={`text-gray-700 cursor-pointer transition-colors ${
+                            isSelected ? "bg-gray-100" : "hover:bg-gray-50"
+                          }`}
+                          onClick={() => setSelectedMovementId(movement.id)}
+                        >
+                          <td className="px-4 py-3">
+                            {new Date(movement.date).toLocaleDateString("es-AR")}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                movement.type === "PAYMENT" ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
+                              }`}
+                            >
+                              {movement.type === "PAYMENT" ? "Pago" : "Cobranza"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-gray-500">
+                            {METHOD_LABELS[movement.method] ?? movement.method}
+                          </td>
+                          <td className="px-4 py-3 text-gray-500">
+                            {movement.reference || "-"}
+                          </td>
+                          <td
+                            className={`px-4 py-3 text-right font-medium ${
+                              movement.type === "PAYMENT" ? "text-red-600" : "text-green-600"
+                            }`}
+                          >
+                            {formatCurrency(movement.amount)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-gray-900">
+                            {formatCurrency(movement.runningBalance)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 border border-dashed border-gray-200 rounded-lg px-4 py-6 text-center">
+                No hay movimientos que coincidan con los filtros aplicados.
+              </p>
+            )}
+          </>
         )}
       </div>
 
