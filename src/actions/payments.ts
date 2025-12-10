@@ -62,6 +62,12 @@ const serializePayment = (
     }>,
 ) => {
     const invoiceContact = payment.invoice?.contact;
+    const treasuryAccountLedgerId = payment.treasuryAccount?.accountId;
+    const counterpartLine = payment.journalEntry?.lines.find(line => line.accountId !== treasuryAccountLedgerId);
+    const rawPayment = payment as typeof payment & {
+        transferGroupId?: string | null;
+        transferDirection?: string | null;
+    };
 
     return {
         id: payment.id,
@@ -127,6 +133,16 @@ const serializePayment = (
                             }
                           : null,
                   })),
+              }
+            : null,
+        transferGroupId: rawPayment.transferGroupId ?? null,
+        transferDirection: rawPayment.transferDirection ?? null,
+        counterpartAccount: counterpartLine?.account
+            ? {
+                  id: counterpartLine.account.id,
+                  name: counterpartLine.account.name,
+                  code: counterpartLine.account.code,
+                  type: counterpartLine.account.type,
               }
             : null,
         allocations: payment.allocations

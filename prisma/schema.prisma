@@ -389,6 +389,11 @@ enum PaymentType {
   COLLECTION // Cobranza de cliente
 }
 
+enum TransferDirection {
+  IN
+  OUT
+}
+
 model Payment {
   id             String       @id @default(uuid())
   organizationId String
@@ -417,6 +422,8 @@ model Payment {
   // Vinculación con cuenta de tesorería
   treasuryAccountId String?
   treasuryAccount   TreasuryAccount? @relation(fields: [treasuryAccountId], references: [id])
+  transferGroupId   String?
+  transferDirection TransferDirection?
 
   attachments Attachment[]
   allocations  PaymentAllocation[]

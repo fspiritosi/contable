@@ -3,8 +3,58 @@
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { auth } from "@clerk/nextjs/server";
-import { AccountType, ContactType, PaymentMethod, PaymentType } from "@prisma/client";
+import { AccountType, ContactType, PaymentMethod, PaymentType, Prisma } from "@prisma/client";
 import { getActiveOrganizationId } from "@/lib/organization";
+import { deleteFile } from "@/lib/storage";
+import { randomUUID } from "crypto";
+
+const AMOUNT_TOLERANCE = 0.01;
+
+type TransferMetadata = {
+    kind: "transfer";
+    groupId: string;
+    direction: "OUT" | "IN";
+    note?: string | null;
+};
+
+const encodeTransferMetadata = (groupId: string, direction: "OUT" | "IN", note?: string | null) =>
+    JSON.stringify({
+        kind: "transfer",
+        groupId,
+        direction,
+        note: note ?? null,
+    });
+
+const parseTransferMetadata = (value?: string | null): TransferMetadata | null => {
+    if (!value) return null;
+    try {
+        const parsed = JSON.parse(value);
+        if (parsed?.kind === "transfer" && typeof parsed.groupId === "string") {
+            return {
+                kind: "transfer",
+                groupId: parsed.groupId,
+                direction: parsed.direction === "IN" ? "IN" : "OUT",
+                note: parsed.note ?? null,
+            };
+        }
+        return null;
+    } catch (error) {
+        return null;
+    }
+};
+
+const paymentRelations = {
+    allocations: true,
+    attachments: true,
+    journalEntry: true,
+    treasuryAccount: true,
+} as const;
+
+type PaymentWithTransferMeta = Prisma.PaymentGetPayload<{
+    include: typeof paymentRelations;
+}> & {
+    transferGroupId?: string | null;
+};
 
 export async function getTreasuryAccounts(organizationId: string) {
     const { userId } = await auth();
@@ -28,6 +78,116 @@ export async function getTreasuryAccounts(organizationId: string) {
     } catch (error) {
         console.error("Failed to fetch treasury accounts:", error);
         return { success: false, error: "Failed to fetch treasury accounts" };
+    }
+}
+
+export async function deleteTreasuryMovement(paymentId: string) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    try {
+        const organizationId = await getActiveOrganizationId();
+
+        const result = await db.$transaction(async tx => {
+            const paymentRecord = await tx.payment.findUnique({
+                where: { id: paymentId },
+                include: {
+                    allocations: true,
+                    attachments: true,
+                    journalEntry: true,
+                    treasuryAccount: true,
+                },
+            });
+
+            if (!paymentRecord || paymentRecord.organizationId !== organizationId) {
+                return { success: false as const, error: "Movimiento no encontrado" };
+            }
+
+            const payment = paymentRecord as PaymentWithTransferMeta;
+
+            const paymentsToDelete: PaymentWithTransferMeta[] = payment.transferGroupId
+                ? ((await tx.payment.findMany({
+                      where: {
+                          transferGroupId: payment.transferGroupId,
+                      } as Prisma.PaymentWhereInput,
+                      include: paymentRelations,
+                  })) as PaymentWithTransferMeta[])
+                : [payment];
+
+            if (
+                !paymentsToDelete.length ||
+                paymentsToDelete.some(mov => mov.organizationId !== organizationId)
+            ) {
+                return { success: false as const, error: "Movimiento no válido para eliminar" };
+            }
+
+            for (const mov of paymentsToDelete) {
+                const allocatedAmount = Number(mov.amountAllocated ?? 0);
+                if (allocatedAmount > AMOUNT_TOLERANCE || mov.allocations.length) {
+                    return {
+                        success: false as const,
+                        error: "No se puede eliminar un movimiento conciliado o con retenciones",
+                    };
+                }
+            }
+
+            const impactedTreasuryAccounts = new Set<string>();
+
+            for (const mov of paymentsToDelete) {
+                if (mov.attachments.length) {
+                    await Promise.all(
+                        mov.attachments.map(async attachment => {
+                            if (attachment.key) {
+                                try {
+                                    await deleteFile(attachment.key);
+                                } catch (fileError) {
+                                    console.error("Failed to delete attachment file:", fileError);
+                                }
+                            }
+                        }),
+                    );
+                    await tx.attachment.deleteMany({ where: { paymentId: mov.id } });
+                }
+
+                if (mov.journalEntryId) {
+                    await tx.journalEntry.delete({ where: { id: mov.journalEntryId } });
+                }
+
+                if (mov.treasuryAccountId) {
+                    const revertChange = mov.type === "PAYMENT" ? Number(mov.amount) : -Number(mov.amount);
+                    await tx.treasuryAccount.update({
+                        where: { id: mov.treasuryAccountId },
+                        data: {
+                            balance: {
+                                increment: revertChange,
+                            },
+                        },
+                    });
+                    impactedTreasuryAccounts.add(mov.treasuryAccountId);
+                }
+
+                await tx.payment.delete({ where: { id: mov.id } });
+            }
+
+            return {
+                success: true as const,
+                impactedAccounts: Array.from(impactedTreasuryAccounts),
+            };
+        });
+
+        if (!result.success) {
+            return result;
+        }
+
+        for (const accountId of result.impactedAccounts) {
+            revalidatePath(`/dashboard/treasury/${accountId}`);
+        }
+        revalidatePath("/dashboard/payments");
+
+        return { success: true as const };
+    } catch (error) {
+        console.error("Failed to delete treasury movement:", error);
+        return { success: false as const, error: "No se pudo eliminar el movimiento" };
     }
 }
 

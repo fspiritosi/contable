@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatCurrency, formatInvoiceNumber } from "@/lib/utils";
 import { ContactType, InvoiceLetter, InvoiceFlow } from "@prisma/client";
-import { createTreasuryMovement } from "@/actions/treasury";
+import { createTreasuryMovement, deleteTreasuryMovement } from "@/actions/treasury";
 import { allocatePayment } from "@/actions/payments";
 import { recordRetention } from "@/actions/retentions";
 import type { SerializedRetentionSetting } from "@/actions/retentions";
@@ -188,6 +188,7 @@ export default function TreasuryMovementsSection({
   const [allocationInputs, setAllocationInputs] = useState<Record<string, string>>({});
   const [invoiceSearch, setInvoiceSearch] = useState("");
   const [isPending, startTransition] = useTransition();
+  const [isDeleting, startDeleteTransition] = useTransition();
   const [isRetentionModalOpen, setIsRetentionModalOpen] = useState(false);
   const [retentionInvoiceId, setRetentionInvoiceId] = useState<string>("");
   const [isSavingRetention, setIsSavingRetention] = useState(false);
@@ -254,6 +255,33 @@ export default function TreasuryMovementsSection({
     setMonthFilter("");
     setDateFrom("");
     setDateTo("");
+  };
+
+  const handleDeleteMovement = () => {
+    if (!selectedMovement) return;
+
+    const hasAllocations =
+      (selectedMovement.allocations && selectedMovement.allocations.length > 0) ||
+      (selectedMovement.amountAllocated && selectedMovement.amountAllocated > AMOUNT_TOLERANCE);
+
+    const confirmMessage = hasAllocations
+      ? "Este movimiento parece estar conciliado o con retenciones y no podrá eliminarse. ¿Deseas continuar?"
+      : "¿Estás seguro de eliminar este movimiento? Esta acción no se puede deshacer.";
+
+    if (!window.confirm(confirmMessage)) return;
+
+    startDeleteTransition(async () => {
+      const res = await deleteTreasuryMovement(selectedMovement.id);
+
+      if (!res.success) {
+        toast.error(res.error ?? "No se pudo eliminar el movimiento");
+        return;
+      }
+
+      toast.success("Movimiento eliminado");
+      setSelectedMovementId(null);
+      router.refresh();
+    });
   };
 
   const handleExportCsv = () => {
@@ -889,7 +917,7 @@ export default function TreasuryMovementsSection({
                 <span className="text-gray-900 text-right">{row.value}</span>
               </div>
             ))}
-            <div className="mt-4">
+            <div className="mt-4 space-y-3">
               <button
                 type="button"
                 onClick={openReconciliation}
@@ -898,16 +926,24 @@ export default function TreasuryMovementsSection({
               >
                 {canReconcile ? "Conciliar movimiento" : "Conciliación no disponible"}
               </button>
+              <button
+                type="button"
+                onClick={handleDeleteMovement}
+                disabled={isDeleting}
+                className="w-full text-sm font-medium rounded-md px-3 py-2 border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-50"
+              >
+                {isDeleting ? "Eliminando..." : "Eliminar movimiento"}
+              </button>
               {!selectedMovement.contactId && (
-                <p className="text-xs text-gray-500 mt-2">
+                <p className="text-xs text-gray-500">
                   Necesitás asociar un contacto al movimiento para poder conciliarlo.
                 </p>
               )}
               {movementRemaining <= AMOUNT_TOLERANCE && (
-                <p className="text-xs text-gray-500 mt-2">Este movimiento ya no tiene saldo pendiente.</p>
+                <p className="text-xs text-gray-500">Este movimiento ya no tiene saldo pendiente.</p>
               )}
               {selectedMovement.contactId && !candidateInvoices.length && movementRemaining > AMOUNT_TOLERANCE && (
-                <p className="text-xs text-gray-500 mt-2">
+                <p className="text-xs text-gray-500">
                   No hay facturas pendientes para este contacto.
                 </p>
               )}
