@@ -31,7 +31,7 @@ const parseTransferMetadata = (value?: string | null): TransferMetadata | null =
         const parsed = JSON.parse(value);
         if (parsed?.kind === "transfer" && typeof parsed.groupId === "string") {
             return {
-                kind: "transfer",
+                ...parsed,
                 groupId: parsed.groupId,
                 direction: parsed.direction === "IN" ? "IN" : "OUT",
                 note: parsed.note ?? null,
@@ -42,6 +42,182 @@ const parseTransferMetadata = (value?: string | null): TransferMetadata | null =
         return null;
     }
 };
+
+type TransferDirectionValue = "OUT" | "IN";
+
+const createTransferPayment = (
+    params: {
+        organizationId: string;
+        amount: number;
+        date: Date;
+        reference: string | null;
+        treasuryAccountId: string;
+        journalEntryId: string;
+        transferGroupId: string;
+        direction: TransferDirectionValue;
+        method: PaymentMethod;
+    },
+): Prisma.PaymentUncheckedCreateInput => {
+    return {
+        organizationId: params.organizationId,
+        type: params.direction === "OUT" ? PaymentType.PAYMENT : PaymentType.COLLECTION,
+        method: params.method,
+        amount: params.amount,
+        date: params.date,
+        reference: params.reference,
+        notes: params.reference,
+        treasuryAccountId: params.treasuryAccountId,
+        journalEntryId: params.journalEntryId,
+        transferGroupId: params.transferGroupId,
+        transferDirection: params.direction,
+    } as unknown as Prisma.PaymentUncheckedCreateInput;
+};
+
+export async function transferTreasuryFunds(data: {
+    fromAccountId: string;
+    toAccountId: string;
+    amount: number;
+    date?: string;
+    note?: string;
+}) {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    try {
+        const organizationId = await getActiveOrganizationId();
+        const parsedAmount = Number(data.amount);
+
+        if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+            return { success: false as const, error: "El monto debe ser mayor a 0" };
+        }
+
+        if (data.fromAccountId === data.toAccountId) {
+            return { success: false as const, error: "Debes elegir cuentas diferentes" };
+        }
+
+        const parsedDate = data.date ? new Date(data.date) : new Date();
+        const trimmedNote = data.note?.trim() ?? "";
+
+        const [fromAccount, toAccount] = await Promise.all([
+            db.treasuryAccount.findUnique({
+                where: { id: data.fromAccountId },
+                include: { account: true },
+            }),
+            db.treasuryAccount.findUnique({
+                where: { id: data.toAccountId },
+                include: { account: true },
+            }),
+        ]);
+
+        if (
+            !fromAccount ||
+            !toAccount ||
+            fromAccount.organizationId !== organizationId ||
+            toAccount.organizationId !== organizationId
+        ) {
+            return { success: false as const, error: "Cuentas de tesorería inválidas" };
+        }
+
+        if (!fromAccount.account || !toAccount.account) {
+            return { success: false as const, error: "Las cuentas contables no están configuradas" };
+        }
+
+        if (fromAccount.currency !== toAccount.currency) {
+            return { success: false as const, error: "Solo se permiten transferencias dentro de la misma moneda" };
+        }
+
+        const availableBalance = Number(fromAccount.balance ?? 0);
+        if (availableBalance + AMOUNT_TOLERANCE < parsedAmount) {
+            return { success: false as const, error: "Saldo insuficiente en la cuenta origen" };
+        }
+
+        const transferGroupId = randomUUID();
+        const baseDescription =
+            trimmedNote || `Transferencia ${fromAccount.name} → ${toAccount.name}`;
+
+        await db.$transaction(async tx => {
+            const journalEntry = await tx.journalEntry.create({
+                data: {
+                    organizationId,
+                    date: parsedDate,
+                    description: baseDescription,
+                    lines: {
+                        create: [
+                            {
+                                accountId: fromAccount.accountId,
+                                debit: 0,
+                                credit: parsedAmount,
+                                description: baseDescription,
+                            },
+                            {
+                                accountId: toAccount.accountId,
+                                debit: parsedAmount,
+                                credit: 0,
+                                description: baseDescription,
+                            },
+                        ],
+                    },
+                },
+            });
+
+            await tx.payment.create({
+                data: createTransferPayment({
+                    organizationId,
+                    amount: parsedAmount,
+                    date: parsedDate,
+                    reference: trimmedNote || null,
+                    treasuryAccountId: fromAccount.id,
+                    journalEntryId: journalEntry.id,
+                    transferGroupId,
+                    direction: "OUT",
+                    method: fromAccount.type,
+                }) as Prisma.PaymentUncheckedCreateInput,
+            });
+
+            await tx.payment.create({
+                data: createTransferPayment({
+                    organizationId,
+                    amount: parsedAmount,
+                    date: parsedDate,
+                    reference: trimmedNote || null,
+                    treasuryAccountId: toAccount.id,
+                    journalEntryId: journalEntry.id,
+                    transferGroupId,
+                    direction: "IN",
+                    method: toAccount.type,
+                }) as Prisma.PaymentUncheckedCreateInput,
+            });
+
+            await tx.treasuryAccount.update({
+                where: { id: fromAccount.id },
+                data: {
+                    balance: {
+                        decrement: parsedAmount,
+                    },
+                },
+            });
+
+            await tx.treasuryAccount.update({
+                where: { id: toAccount.id },
+                data: {
+                    balance: {
+                        increment: parsedAmount,
+                    },
+                },
+            });
+        });
+
+        revalidatePath("/dashboard/treasury");
+        revalidatePath(`/dashboard/treasury/${fromAccount.id}`);
+        revalidatePath(`/dashboard/treasury/${toAccount.id}`);
+        revalidatePath("/dashboard/payments");
+
+        return { success: true as const };
+    } catch (error) {
+        console.error("Failed to transfer treasury funds:", error);
+        return { success: false as const, error: "No se pudo registrar la transferencia" };
+    }
+}
 
 const paymentRelations = {
     allocations: true,
@@ -132,6 +308,7 @@ export async function deleteTreasuryMovement(paymentId: string) {
             }
 
             const impactedTreasuryAccounts = new Set<string>();
+            const journalEntriesToCheck = new Set<string>();
 
             for (const mov of paymentsToDelete) {
                 if (mov.attachments.length) {
@@ -150,7 +327,7 @@ export async function deleteTreasuryMovement(paymentId: string) {
                 }
 
                 if (mov.journalEntryId) {
-                    await tx.journalEntry.delete({ where: { id: mov.journalEntryId } });
+                    journalEntriesToCheck.add(mov.journalEntryId);
                 }
 
                 if (mov.treasuryAccountId) {
@@ -167,6 +344,16 @@ export async function deleteTreasuryMovement(paymentId: string) {
                 }
 
                 await tx.payment.delete({ where: { id: mov.id } });
+            }
+
+            for (const journalEntryId of journalEntriesToCheck) {
+                const remainingLinks = await tx.payment.count({
+                    where: { journalEntryId },
+                });
+
+                if (remainingLinks === 0) {
+                    await tx.journalEntry.delete({ where: { id: journalEntryId } });
+                }
             }
 
             return {

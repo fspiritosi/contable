@@ -2,7 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { createTreasuryAccount, updateTreasuryAccount, deleteTreasuryAccount } from "@/actions/treasury";
+import {
+    createTreasuryAccount,
+    updateTreasuryAccount,
+    deleteTreasuryAccount,
+    transferTreasuryFunds,
+} from "@/actions/treasury";
 import { Plus, Wallet, Building2, Trash2, Edit2, X } from "lucide-react";
 import { PaymentMethod, Account } from "@prisma/client";
 import { toast } from "sonner";
@@ -35,6 +40,14 @@ export default function AccountList({ initialAccounts, organizationId, chartOfAc
     const [accounts, setAccounts] = useState<SerializedTreasuryAccount[]>(initialAccounts);
     const [isCreating, setIsCreating] = useState(false);
     const [editingAccount, setEditingAccount] = useState<SerializedTreasuryAccount | null>(null);
+    const [isTransferring, setIsTransferring] = useState(false);
+    const [transferForm, setTransferForm] = useState({
+        fromAccountId: "",
+        toAccountId: "",
+        amount: "",
+        date: new Date().toISOString().split("T")[0],
+        note: "",
+    });
 
     const [formData, setFormData] = useState<{
         name: string;
@@ -70,6 +83,73 @@ export default function AccountList({ initialAccounts, organizationId, chartOfAc
             accountId: "",
             initialBalance: 0,
         });
+    };
+
+    const selectedFromAccount = transferForm.fromAccountId
+        ? accounts.find(account => account.id === transferForm.fromAccountId) ?? null
+        : null;
+
+    const destinationAccounts = selectedFromAccount
+        ? accounts.filter(
+              account => account.id !== selectedFromAccount.id && account.currency === selectedFromAccount.currency,
+          )
+        : accounts.filter(account => account.id !== transferForm.fromAccountId);
+
+    const handleTransferChange = (field: keyof typeof transferForm, value: string) => {
+        setTransferForm(prev => {
+            if (field === "fromAccountId") {
+                return {
+                    ...prev,
+                    [field]: value,
+                    toAccountId: prev.toAccountId === value ? "" : prev.toAccountId,
+                };
+            }
+            return { ...prev, [field]: value };
+        });
+    };
+
+    const handleTransferSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!transferForm.fromAccountId || !transferForm.toAccountId || !transferForm.amount) return;
+
+        const parsedAmount = Number(transferForm.amount);
+        if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+            toast.error("Ingresa un monto válido");
+            return;
+        }
+
+        setIsTransferring(true);
+        const toastId = toast.loading("Registrando transferencia...");
+        try {
+            const res = await transferTreasuryFunds({
+                fromAccountId: transferForm.fromAccountId,
+                toAccountId: transferForm.toAccountId,
+                amount: parsedAmount,
+                date: transferForm.date,
+                note: transferForm.note,
+            });
+
+            if (!res.success) {
+                toast.error(res.error ?? "No se pudo registrar la transferencia");
+                return;
+            }
+
+            toast.success("Transferencia registrada");
+            setTransferForm({
+                fromAccountId: "",
+                toAccountId: "",
+                amount: "",
+                date: new Date().toISOString().split("T")[0],
+                note: "",
+            });
+            router.refresh();
+        } catch (error) {
+            console.error(error);
+            toast.error("Ocurrió un error inesperado");
+        } finally {
+            toast.dismiss(toastId);
+            setIsTransferring(false);
+        }
     };
 
     const handleEditClick = (account: SerializedTreasuryAccount) => {
@@ -151,6 +231,111 @@ export default function AccountList({ initialAccounts, organizationId, chartOfAc
 
     return (
         <div className="space-y-6">
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+                    <div>
+                        <h3 className="text-lg font-semibold text-gray-900">Transferir fondos entre cuentas</h3>
+                        <p className="text-sm text-gray-500">
+                            Mové efectivo entre tus cajas o cuentas bancarias manteniendo la trazabilidad contable.
+                        </p>
+                    </div>
+                </div>
+                <form onSubmit={handleTransferSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Cuenta origen</label>
+                        <select
+                            required
+                            value={transferForm.fromAccountId}
+                            onChange={e => handleTransferChange("fromAccountId", e.target.value)}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                        >
+                            <option value="">Seleccioná una cuenta...</option>
+                            {accounts.map(account => (
+                                <option key={account.id} value={account.id}>
+                                    {account.name} · {account.currency} · Saldo ${account.balance.toLocaleString()}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Cuenta destino</label>
+                        <select
+                            required
+                            value={transferForm.toAccountId}
+                            onChange={e => handleTransferChange("toAccountId", e.target.value)}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                            disabled={!selectedFromAccount}
+                        >
+                            <option value="">
+                                {selectedFromAccount ? "Seleccioná una cuenta..." : "Elegí primero la cuenta origen"}
+                            </option>
+                            {destinationAccounts.map(account => (
+                                <option key={account.id} value={account.id}>
+                                    {account.name} · {account.currency} · Saldo ${account.balance.toLocaleString()}
+                                </option>
+                            ))}
+                        </select>
+                        {selectedFromAccount && (
+                            <p className="text-xs text-gray-500 mt-1">
+                                Solo se muestran cuentas en {selectedFromAccount.currency}.
+                            </p>
+                        )}
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Monto</label>
+                        <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            required
+                            value={transferForm.amount}
+                            onChange={e => handleTransferChange("amount", e.target.value)}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                            placeholder="0,00"
+                        />
+                        {selectedFromAccount && (
+                            <p className="text-xs text-gray-500 mt-1">
+                                Saldo disponible: ${selectedFromAccount.balance.toLocaleString()}
+                            </p>
+                        )}
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Fecha</label>
+                        <input
+                            type="date"
+                            required
+                            value={transferForm.date}
+                            onChange={e => handleTransferChange("date", e.target.value)}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                        />
+                    </div>
+                    <div className="md:col-span-2 lg:col-span-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Nota (opcional)</label>
+                        <textarea
+                            value={transferForm.note}
+                            onChange={e => handleTransferChange("note", e.target.value)}
+                            rows={2}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                            placeholder="Motivo o referencia de la transferencia"
+                        />
+                    </div>
+                    <div className="md:col-span-2 lg:col-span-4 flex justify-end">
+                        <button
+                            type="submit"
+                            disabled={
+                                isTransferring ||
+                                !transferForm.fromAccountId ||
+                                !transferForm.toAccountId ||
+                                !transferForm.amount
+                            }
+                            className="inline-flex items-center px-4 py-2 rounded-md bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-60"
+                        >
+                            {isTransferring ? "Registrando..." : "Registrar transferencia"}
+                        </button>
+                    </div>
+                </form>
+            </div>
+
             {!isCreating ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {/* Add New Card */}
